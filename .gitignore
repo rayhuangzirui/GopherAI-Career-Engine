@@ -1,0 +1,43 @@
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Env / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Go ----
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+# Test binary, build with `go test -c`
+*.test
+bin/
+dist/
+
+# go build cache
+**/tmp/
+**/.tmp/
+
+# ---- Node / Frontend ----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.vite/
+.cache/
+
+# ---- IDEs and editors ----
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# ---- Docker ----
+docker-compose.override.yml
