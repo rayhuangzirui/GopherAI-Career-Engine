@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS processed_keys;
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS sessions;
+DROP TABLE IF EXISTS users;

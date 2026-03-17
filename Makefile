@@ -100,6 +100,12 @@ sh-web:
 sh-db:
 	$(DC) exec $(DB_SERVICE) sh
 
+.PHONY: migrate-up migrate-down
+migrate-up:
+	$(DC) run --rm migrate
+migrate-down:
+	$(DC) run --rm migrate /bin/sh -lc "migrate -path=/migrations -database 'mysql://app:app@tcp(mysql:3306)/appdb?multiStatements=true' down 1"
+
 # Simple health check: container status + (optional) curl to API health endpoint
 .PHONY: health
 health:

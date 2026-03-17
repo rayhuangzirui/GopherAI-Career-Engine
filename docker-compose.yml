@@ -16,6 +16,20 @@ services:
       timeout: 5s
       retries: 30
 
+  migrate:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ./api/migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-lc"]
+    command: >
+      "migrate
+      -path=/migrations
+      -database 'mysql://app:app@tcp(mysql:3306)/appdb?multiStatements=true'
+      up"
+
   redis:
     image: redis:7-alpine
     ports:
