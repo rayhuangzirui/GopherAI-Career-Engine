@@ -1,79 +1,134 @@
-# GopherAI Chat Platform
+# GopherAI-Career-Engine
 
-Backend-first chat platform built with Go (Gin), designed for reproducible local development with MySQL, Redis, and RabbitMQ via Docker Compose.
+GopherAI-Career-Engine is a Dockerized Go backend task processing system for career workflows.  
+The project is designed to be reproducible, explainable, and extensible, with an initial focus on asynchronous resume and job description analysis tasks.
 
-## What this repo demonstrates
+## Why this project
 
-- **One-command local dev:** `make up` starts API + MySQL + Redis + RabbitMQ via Docker Compose
-- **Health check:** `GET /health` verifies API + MySQL/Redis/RabbitMQ connectivity
-- **Version pinning:** Go toolchain pinned (**WSL:** Go `1.23.0`, **container build:** Go `1.23.12`)
+Instead of building a generic AI chat demo, this project focuses on a concrete backend use case:
 
----
+- create career-related analysis tasks
+- process them asynchronously
+- persist task status and results
+- support future expansion into multiple career workflows
 
-## Quick Start
+The goal is to demonstrate backend engineering skills through:
+
+- task lifecycle management
+- queue-based asynchronous processing
+- versioned SQL migrations
+- reproducible local development with Docker Compose
+- clean separation between API and worker responsibilities
+
+## Current architecture
+
+### Stack
+
+- **Go + Gin** for the backend API
+- **MySQL** for persistent storage
+- **Redis** for cache / short-lived state
+- **RabbitMQ** for asynchronous task delivery
+- **GORM** for database access
+- **SQL migrations** as the single source of truth for schema
+- **Docker Compose** for local reproducible development
+
+### Current system direction
+
+The system is being built as a **career task engine**, not a chat-first application.
+
+Initial v1 workflow:
+
+1. client submits a career analysis task
+2. API creates a task record in MySQL
+3. task is queued for asynchronous processing
+4. worker processes the task
+5. task result is persisted and can be queried later
+
+## Current progress
+
+### Completed
+
+- Docker Compose local environment
+- MySQL / Redis / RabbitMQ service startup
+- API health endpoint
+- GORM MySQL initialization
+- `/debug/db` database connectivity check
+- versioned SQL migrations
+- initial `tasks` table for task processing workflows
+
+### In progress
+
+- task repository
+- task creation / query endpoints
+- RabbitMQ producer / consumer flow
+- async worker processing
+- task status transitions
+- idempotent message handling with `processed_keys`
+
+## Database design
+
+Current core tables include:
+
+- `users`
+- `tasks`
+- `processed_keys`
+- `schema_migrations`
+
+The `tasks` table is designed around an async processing lifecycle:
+
+- `task_type`
+- `status`
+- `input_payload`
+- `result_payload`
+- `error_message`
+- `retry_count`
+- `started_at`
+- `completed_at`
+
+## Task lifecycle
+
+Planned task states:
+
+- `pending`
+- `queued`
+- `processing`
+- `completed`
+- `failed`
+
+This makes task execution observable and allows future support for retries and worker scaling.
+
+## Local development
 
 ### Requirements
-- Docker + Docker Compose
-- Make
-- Go (optional, for local IDE tooling)
 
-### Run
+- Docker
+- Docker Compose
+
+### Start services
+
 ```bash
-cp .env.example .env
 make up
 ```
+### Check service health
 
-### Verify
 ```bash
-curl -sS http://localhost:8080/health
+curl http://localhost:8080/health
 ```
 
-### Expected response (example)
+### Check database connectivity
+
+```bash
+curl http://localhost:8080/debug/db
+```
+
+### Example health response
+
 ```json
-{"ok":true,"env":"dev","mysql":"true","redis":"true","rabbitmq":"true"}
-```
-
-### Useful commands
-```bash
-make ps          # List running containers
-make logs-api    # View API logs
-make down        # Stop and remove containers
-```
-
-## Runtime & Toolchain Versions (Pinned)
-To keep builds reproducible, this project pins toolchian and service versions.
-
-### Toolchain
-- Go (local IDE / WSL): `1.23.0`
-- Go (container build): `1.23.12`
-
-### Services (Docker images)
-- MySQL: `mysql:8.4`
-- Redis: `redis:7-alpine`
-- RabbitMQ (management UI): `rabbitmq:3-management`
-
-### Verify versions
-Local (WSL)
-```bash
-go version
-docker --version
-docker-compose --version
-```
-
-## Endpoints
-- `GET /health`: Check API and service connectivity
-
-## RabbitMQ Management UI
-- URL: `http://localhost:15672`
-- Default credentials: `guest` / `guest`
-If you see a login/permission error, create a dedicated user in the RabbitMQ UI and update RABBITMQ_USER and `RABBITMQ_URL` in `.env`.
-
-## Project Layout
-```.
-├── api/                # Go backend code (Gin)
-├── web/                # Frontend code (planned / optional)
-├── docker-compose.yml  # Docker Compose configuration
-├── .env.example        # sample configuration
-├── Makefile            # Make commands for local development
-└── README.md           
+{
+  "env": "dev",
+  "mysql": "true",
+  "redis": "true",
+  "rabbitmq": "true",
+  "ok": true
+}
 ```

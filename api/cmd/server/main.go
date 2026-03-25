@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rayhuangzirui/GopherAI-Chat-Platform/config"
-	mysqlinfra "github.com/rayhuangzirui/GopherAI-Chat-Platform/internal/infra/mysql"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/config"
+	mysqlinfra "github.com/rayhuangzirui/GopherAI-Career-Engine/internal/infra/mysql"
 	"gorm.io/gorm"
 )
 
@@ -15,10 +15,10 @@ func main() {
 	cfg := config.Load()
 
 	db, err := initMySQLWithRetry(mysqlinfra.Config{
-		DSN: cfg.MySQLDSN,
+		DSN:          cfg.MySQLDSN,
 		MaxIdleConns: 10,
 		MaxOpenConns: 20,
-		MaxLifetime: 30 * time.Minute,
+		MaxLifetime:  30 * time.Minute,
 	}, 10, 3*time.Second)
 
 	if err != nil {

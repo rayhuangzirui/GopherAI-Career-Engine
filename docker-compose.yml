@@ -25,11 +25,18 @@ services:
       - ./api/migrations:/migrations:ro
     entrypoint: ["/bin/sh", "-lc"]
     command: >
-      "migrate
-      -path=/migrations
-      -database 'mysql://app:app@tcp(mysql:3306)/appdb?multiStatements=true'
-      up"
-
+      "
+      for i in 1 2 3 4 5; do
+        migrate -path=/migrations -database 'mysql://app:app@tcp(mysql:3306)/appdb?multiStatements=true' up && exit 0;
+        echo 'migration failed, retrying...';
+        sleep 3;
+      done;
+      exit 1
+      "
+  #      "migrate
+  #      -path=/migrations
+  #      -database 'mysql://app:app@tcp(mysql:3306)/appdb?multiStatements=true'
+  #      up"
   redis:
     image: redis:7-alpine
     ports:

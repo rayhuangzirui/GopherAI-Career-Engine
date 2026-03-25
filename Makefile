@@ -1,27 +1,14 @@
-# Makefile
-# Usage:
-#   make help
-#   make up
-#   make logs-api
-#   make test
-#   make down
-
 SHELL := /bin/bash
 
-# ---- Compose ----
 COMPOSE ?= docker compose
-PROFILE ?= $(if $(COMPOSE_PROFILES),$(COMPOSE_PROFILES),)
-DC      := $(COMPOSE) $(if $(PROFILE),--profile $(PROFILE),)
+DC := $(COMPOSE)
 
-# If your compose file isn't named docker-compose.yml, change this:
-# DC := $(COMPOSE) -f compose.yml
+API_SERVICE      ?= api
+MYSQL_SERVICE    ?= mysql
+REDIS_SERVICE    ?= redis
+RABBITMQ_SERVICE ?= rabbitmq
+MIGRATE_SERVICE  ?= migrate
 
-# ---- Services (edit these to match your docker-compose.yml) ----
-API_SERVICE   ?= api
-WEB_SERVICE   ?= web
-DB_SERVICE    ?= db
-
-# ---- Misc ----
 PROJECT_NAME ?= $(notdir $(CURDIR))
 
 .PHONY: help
@@ -30,28 +17,32 @@ help:
 	@echo "$(PROJECT_NAME) — common dev commands"
 	@echo ""
 	@echo "Core:"
-	@echo "  make up              Start all services (build if needed)"
+	@echo "  make up              Start infra -> run migrations -> start api"
+	@echo "  make infra           Start mysql, redis, rabbitmq"
+	@echo "  make api             Start api only"
+	@echo "  make migrate-up      Run migrations"
+	@echo "  make migrate-down    Roll back 1 migration"
 	@echo "  make down            Stop and remove containers"
 	@echo "  make restart         Restart all services"
 	@echo "  make ps              Show running services"
-	@echo "  make logs            Tail logs for all services"
 	@echo ""
 	@echo "Logs:"
+	@echo "  make logs            Tail logs for all services"
 	@echo "  make logs-api        Tail API logs"
-	@echo "  make logs-web        Tail Web logs"
-	@echo "  make logs-db         Tail DB logs"
+	@echo "  make logs-mysql      Tail MySQL logs"
+	@echo "  make logs-redis      Tail Redis logs"
+	@echo "  make logs-rabbitmq   Tail RabbitMQ logs"
+	@echo "  make logs-migrate    Show migration logs"
 	@echo ""
 	@echo "Shell:"
 	@echo "  make sh-api          Shell into API container"
-	@echo "  make sh-web          Shell into Web container"
-	@echo "  make sh-db           Shell into DB container"
+	@echo "  make sh-mysql        Shell into MySQL container"
 	@echo ""
 	@echo "Health:"
-	@echo "  make health          Quick compose health check"
+	@echo "  make health          Quick health check"
 	@echo ""
-	@echo "Testing (requires commands inside container):"
-	@echo "  make test            Run API tests"
-	@echo "  make lint            Run API linter (optional)"
+	@echo "Testing:"
+	@echo "  make test            Run Go tests in API container"
 	@echo ""
 	@echo "Clean:"
 	@echo "  make clean           Remove containers + volumes (DANGEROUS)"
@@ -59,7 +50,17 @@ help:
 
 .PHONY: up
 up:
-	$(DC) up -d --build
+	$(DC) up -d $(MYSQL_SERVICE) $(REDIS_SERVICE) $(RABBITMQ_SERVICE)
+	$(DC) run --rm $(MIGRATE_SERVICE)
+	$(DC) up -d $(API_SERVICE)
+
+.PHONY: infra
+infra:
+	$(DC) up -d $(MYSQL_SERVICE) $(REDIS_SERVICE) $(RABBITMQ_SERVICE)
+
+.PHONY: api
+api:
+	$(DC) up -d $(API_SERVICE)
 
 .PHONY: down
 down:
@@ -80,79 +81,48 @@ logs:
 logs-api:
 	$(DC) logs -f --tail=200 $(API_SERVICE)
 
-.PHONY: logs-web
-logs-web:
-	$(DC) logs -f --tail=200 $(WEB_SERVICE)
+.PHONY: logs-mysql
+logs-mysql:
+	$(DC) logs -f --tail=200 $(MYSQL_SERVICE)
 
-.PHONY: logs-db
-logs-db:
-	$(DC) logs -f --tail=200 $(DB_SERVICE)
+.PHONY: logs-redis
+logs-redis:
+	$(DC) logs -f --tail=200 $(REDIS_SERVICE)
+
+.PHONY: logs-rabbitmq
+logs-rabbitmq:
+	$(DC) logs -f --tail=200 $(RABBITMQ_SERVICE)
+
+.PHONY: logs-migrate
+logs-migrate:
+	$(DC) logs --tail=200 $(MIGRATE_SERVICE)
 
 .PHONY: sh-api
 sh-api:
 	$(DC) exec $(API_SERVICE) sh
 
-.PHONY: sh-web
-sh-web:
-	$(DC) exec $(WEB_SERVICE) sh
+.PHONY: sh-mysql
+sh-mysql:
+	$(DC) exec $(MYSQL_SERVICE) sh
 
-.PHONY: sh-db
-sh-db:
-	$(DC) exec $(DB_SERVICE) sh
-
-.PHONY: migrate-up migrate-down
+.PHONY: migrate-up
 migrate-up:
-	$(DC) run --rm migrate
-migrate-down:
-	$(DC) run --rm migrate /bin/sh -lc "migrate -path=/migrations -database 'mysql://app:app@tcp(mysql:3306)/appdb?multiStatements=true' down 1"
+	$(DC) run --rm $(MIGRATE_SERVICE)
 
-# Simple health check: container status + (optional) curl to API health endpoint
+.PHONY: migrate-down
+migrate-down:
+	$(DC) run --rm $(MIGRATE_SERVICE) /bin/sh -lc "migrate -path=/migrations -database 'mysql://app:app@tcp(mysql:3306)/appdb?multiStatements=true' down 1"
+
 .PHONY: health
 health:
 	@$(DC) ps
 	@echo ""
 	@curl -sS http://localhost:8080/health | python3 -m json.tool || true
 
-# ---- API commands (adjust to your stack) ----
-# Assumes Go API inside container.
 .PHONY: test
 test:
 	$(DC) exec $(API_SERVICE) sh -lc 'go test ./...'
 
-.PHONY: lint
-lint:
-	@echo "If you use golangci-lint, add it to your image and enable this target."
-	@echo "Example:"
-	@echo "  $(DC) exec $(API_SERVICE) sh -lc \"golangci-lint run\""
-
-# ---- Dangerous: wipes volumes (DB data) ----
 .PHONY: clean
 clean:
 	$(DC) down -v
-
-
-#SHELL := /bin/bash
-#COMPOSE ?= docker compose
-#
-#.PHONY: up down ps logs logs-api sh-api health
-#
-#up:
-#	$(COMPOSE) up -d --build
-#
-#down:
-#	$(COMPOSE) down
-#
-#ps:
-#	$(COMPOSE) ps
-#
-#logs:
-#	$(COMPOSE) logs -f --tail=200
-#
-#logs-api:
-#	$(COMPOSE) logs -f --tail=200 api
-#
-#sh-api:
-#	$(COMPOSE) exec api sh
-#
-#health:
-#	@curl -s http://localhost:8080/health | python3 -m json.tool || true
