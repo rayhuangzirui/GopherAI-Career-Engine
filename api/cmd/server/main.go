@@ -7,7 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/config"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/handler"
 	mysqlinfra "github.com/rayhuangzirui/GopherAI-Career-Engine/internal/infra/mysql"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"gorm.io/gorm"
 )
 
@@ -56,6 +58,9 @@ func initMySQLWithRetry(cfg mysqlinfra.Config, maxAttempts int, delay time.Durat
 }
 
 func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB) {
+	taskRepo := repository.NewTaskRepository(db)
+	taskHandler := handler.NewTaskHandler(taskRepo)
+
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"ok":       true,
@@ -66,7 +71,7 @@ func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB) {
 		})
 	})
 
-	r.GET("/debug/db", func(c *gin.Context) {
+	r.GET("debug/db", func(c *gin.Context) {
 		var usersCount int64
 
 		if err := db.Table("users").Count(&usersCount).Error; err != nil {
@@ -82,4 +87,8 @@ func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB) {
 			"usersCount": usersCount,
 		})
 	})
+
+	r.POST("/tasks/resume-analysis", taskHandler.CreateResumeAnalysisTask)
+	r.GET("/tasks/:id", taskHandler.GetTask)
+	r.GET("/tasks/:id/result", taskHandler.GetTaskResult)
 }
