@@ -45,8 +45,15 @@ func NewTaskPublisher(rabbitURL string) (*TaskPublisher, error) {
 	return &TaskPublisher{conn: conn, channel: channel, queue: q}, nil
 }
 
+func BuildTaskMessageKey(taskID int64) string {
+	return fmt.Sprintf("resume_analysis:%d", taskID)
+}
+
 func (p *TaskPublisher) PublishTask(ctx context.Context, taskID int64) error {
-	msg := TaskMessage{TaskID: taskID}
+	msg := TaskMessage{
+		TaskID:     taskID,
+		MessageKey: BuildTaskMessageKey(taskID),
+	}
 
 	body, err := json.Marshal(msg)
 

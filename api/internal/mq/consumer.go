@@ -13,16 +13,18 @@ import (
 )
 
 type TaskConsumer struct {
-	conn     *amqp.Connection
-	channel  *amqp.Channel
-	queue    amqp.Queue
-	taskRepo *repository.TaskRepository
-	analyzer analyzer.Analyzer
+	conn             *amqp.Connection
+	channel          *amqp.Channel
+	queue            amqp.Queue
+	taskRepo         *repository.TaskRepository
+	processedKeyRepo *repository.ProcessedKeyRepository
+	analyzer         analyzer.Analyzer
 }
 
 func NewTaskConsumer(
 	rabbitMQURL string,
 	taskRepo *repository.TaskRepository,
+	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
 ) (*TaskConsumer, error) {
 	conn, err := amqp.Dial(rabbitMQURL)
@@ -51,11 +53,12 @@ func NewTaskConsumer(
 	}
 
 	return &TaskConsumer{
-		conn:     conn,
-		channel:  ch,
-		queue:    q,
-		taskRepo: taskRepo,
-		analyzer: analyzer,
+		conn:             conn,
+		channel:          ch,
+		queue:            q,
+		taskRepo:         taskRepo,
+		processedKeyRepo: processedKeyRepo,
+		analyzer:         analyzer,
 	}, nil
 }
 
@@ -105,6 +108,20 @@ func (c *TaskConsumer) handleMessage(ctx context.Context, msg amqp.Delivery) err
 		return fmt.Errorf("unmarshal task message: %w", err)
 	}
 
+	if taskMessage.MessageKey == "" {
+		return fmt.Errorf("message key is empty")
+	}
+
+	exists, err := c.processedKeyRepo.Exists(ctx, taskMessage.MessageKey)
+	if err != nil {
+		return fmt.Errorf("check processed key %q: %w", taskMessage.MessageKey, err)
+	}
+
+	if exists {
+		log.Printf("skip already processed message: key=%s task_id=%d", taskMessage.MessageKey, taskMessage.TaskID)
+		return nil
+	}
+
 	task, err := c.taskRepo.GetTask(ctx, taskMessage.TaskID)
 	if err != nil {
 		return fmt.Errorf("get task %d: %w", taskMessage.TaskID, err)
@@ -151,6 +168,10 @@ func (c *TaskConsumer) handleMessage(ctx context.Context, msg amqp.Delivery) err
 
 	if err := c.taskRepo.MarkCompleted(ctx, task.ID, string(resultBytes)); err != nil {
 		return fmt.Errorf("mark completed task %d: %w", task.ID, err)
+	}
+
+	if err := c.processedKeyRepo.Create(ctx, taskMessage.MessageKey); err != nil {
+		return fmt.Errorf("create processed key %q: %w", taskMessage.MessageKey, err)
 	}
 
 	log.Printf("task %d completed\n", task.ID)
