@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,12 +13,20 @@ import (
 	"gorm.io/gorm"
 )
 
-type TaskHandler struct {
-	taskRepo *repository.TaskRepository
+type TaskPublisher interface {
+	PublishTask(ctx context.Context, taskID int64) error
 }
 
-func NewTaskHandler(taskRepo *repository.TaskRepository) *TaskHandler {
-	return &TaskHandler{taskRepo: taskRepo}
+type TaskHandler struct {
+	taskRepo  *repository.TaskRepository
+	publisher TaskPublisher
+}
+
+func NewTaskHandler(taskRepo *repository.TaskRepository, publisher TaskPublisher) *TaskHandler {
+	return &TaskHandler{
+		taskRepo:  taskRepo,
+		publisher: publisher,
+	}
 }
 
 type CreateResumeAnalysisTaskRequest struct {
@@ -63,10 +72,26 @@ func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 		return
 	}
 
+	if err := h.publisher.PublishTask(c.Request.Context(), task.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if err := h.taskRepo.MarkQueued(c.Request.Context(), task.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"ok":     true,
 		"taskId": task.ID,
-		"status": task.Status,
+		"status": model.TaskStatusQueued,
 	})
 }
 

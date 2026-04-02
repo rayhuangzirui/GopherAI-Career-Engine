@@ -9,6 +9,7 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/config"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/handler"
 	mysqlinfra "github.com/rayhuangzirui/GopherAI-Career-Engine/internal/infra/mysql"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/mq"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"gorm.io/gorm"
 )
@@ -27,9 +28,15 @@ func main() {
 		log.Fatalf("init mysql failed after retries: %v", err)
 	}
 
+	taskPublisher, err := mq.NewTaskPublisher(cfg.RabbitMQURL)
+	if err != nil {
+		log.Fatalf("init rabbitmq failed: %v", err)
+	}
+	defer taskPublisher.Close()
+
 	r := gin.Default()
 
-	registerRoutes(r, cfg, db)
+	registerRoutes(r, cfg, db, taskPublisher)
 
 	log.Printf("starting server on port %s in %s mode", cfg.Port, cfg.AppEnv)
 	if err := r.Run(":" + cfg.Port); err != nil {
@@ -57,9 +64,9 @@ func initMySQLWithRetry(cfg mysqlinfra.Config, maxAttempts int, delay time.Durat
 	return nil, lastErr
 }
 
-func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB) {
+func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB, taskPublisher *mq.TaskPublisher) {
 	taskRepo := repository.NewTaskRepository(db)
-	taskHandler := handler.NewTaskHandler(taskRepo)
+	taskHandler := handler.NewTaskHandler(taskRepo, taskPublisher)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -71,7 +78,7 @@ func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB) {
 		})
 	})
 
-	r.GET("debug/db", func(c *gin.Context) {
+	r.GET("/debug/db", func(c *gin.Context) {
 		var usersCount int64
 
 		if err := db.Table("users").Count(&usersCount).Error; err != nil {
