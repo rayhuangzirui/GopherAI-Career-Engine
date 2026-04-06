@@ -30,8 +30,8 @@ func NewTaskHandler(taskRepo *repository.TaskRepository, publisher TaskPublisher
 }
 
 type CreateResumeAnalysisTaskRequest struct {
-	UserID     int64  `json:"userId" binding:"required"`
-	ResumeText string `json:"resumeText" binding:"required"`
+	UserID     int64  `json:"user_id" binding:"required"`
+	ResumeText string `json:"resume_text" binding:"required"`
 }
 
 func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
@@ -89,9 +89,9 @@ func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"ok":     true,
-		"taskId": task.ID,
-		"status": model.TaskStatusQueued,
+		"ok":      true,
+		"task_id": task.ID,
+		"status":  model.TaskStatusQueued,
 	})
 }
 
@@ -119,19 +119,19 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"id":       task.ID,
-		"userId":   task.UserID,
-		"taskType": task.TaskType,
-		"status":   task.Status,
-		//"inputPayload": task.InputPayload,
-		//"resultPayload": task.ResultPayload,
-		//"errorMessage": task.ErrorMessage,
-		"retryCount":  task.RetryCount,
-		"startedAt":   task.StartedAt,
-		"completedAt": task.CompletedAt,
-		"createdAt":   task.CreatedAt,
-		"updatedAt":   task.UpdatedAt,
+		"ok":        true,
+		"id":        task.ID,
+		"user_id":   task.UserID,
+		"task_type": task.TaskType,
+		"status":    task.Status,
+		//"input_payload": task.InputPayload,
+		//"result_payload": task.ResultPayload,
+		"error_message": task.ErrorMessage,
+		"retry_count":  task.RetryCount,
+		"started_at":   task.StartedAt,
+		"completed_at": task.CompletedAt,
+		"created_at":   task.CreatedAt,
+		"updated_at":   task.UpdatedAt,
 	})
 }
 
@@ -179,9 +179,9 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 		return
 	case model.TaskStatusFailed:
 		c.JSON(http.StatusOK, gin.H{
-			"ok":           false,
-			"status":       task.Status,
-			"errorMessage": task.ErrorMessage,
+			"ok":            false,
+			"status":        task.Status,
+			"error_message": task.ErrorMessage,
 		})
 		return
 	default:

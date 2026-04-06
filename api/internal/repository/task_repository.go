@@ -120,6 +120,7 @@ func (r *TaskRepository) MarkFailed(ctx context.Context, id int64, errorMessage 
 			"status":        model.TaskStatusFailed,
 			"error_message": errorMessage,
 			"completed_at":  &now,
+			"retry_count":   gorm.Expr("retry_count + 1"),
 		})
 	if tx.Error != nil {
 		return tx.Error
