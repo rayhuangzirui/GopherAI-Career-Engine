@@ -132,6 +132,48 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 	}
 }
 
+func (h *TaskHandler) ListTasks(c *gin.Context) {
+	userID, ok := parseUserIDFromQuery(c)
+	if !ok {
+		return
+	}
+
+	limit, ok := parseLimitFromQuery(c)
+	if !ok {
+		return
+	}
+
+	tasks, err := h.taskRepo.ListTasks(c.Request.Context(), userID, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	responseTasks := make([]gin.H, 0, len(tasks))
+	for _, task := range tasks {
+		responseTasks = append(responseTasks, gin.H{
+			"id":            task.ID,
+			"user_id":       task.UserID,
+			"task_type":     task.TaskType,
+			"status":        task.Status,
+			"error_message": task.ErrorMessage,
+			"retry_count":   task.RetryCount,
+			"started_at":    task.StartedAt,
+			"completed_at":  task.CompletedAt,
+			"created_at":    task.CreatedAt,
+			"updated_at":    task.UpdatedAt,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":    true,
+		"tasks": responseTasks,
+	})
+}
+
 func (h *TaskHandler) createTask(c *gin.Context, userID int64, taskType string, input any) {
 	inputBytes, err := json.Marshal(input)
 	if err != nil {
@@ -214,6 +256,44 @@ func bindJSON[T any](c *gin.Context, req *T) bool {
 		return false
 	}
 	return true
+}
+
+func parseUserIDFromQuery(c *gin.Context) (int64, bool) {
+	rawUserID := c.Query("user_id")
+	if rawUserID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ok":    false,
+			"error": "missing user ID",
+		})
+		return 0, false
+	}
+
+	userID, err := strconv.ParseInt(rawUserID, 10, 64)
+	if err != nil || userID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ok":    false,
+			"error": "invalid user ID",
+		})
+		return 0, false
+	}
+
+	return userID, true
+}
+
+// limit the number of tasks returned in a single response
+func parseLimitFromQuery(c *gin.Context) (int, bool) {
+	rawLimit := c.DefaultQuery("limit", "20")
+
+	limit, err := strconv.Atoi(rawLimit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ok":    false,
+			"error": "invalid limit",
+		})
+		return 0, false
+	}
+
+	return limit, true
 }
 
 func parseTaskID(c *gin.Context) (int64, bool) {
