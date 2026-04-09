@@ -1,134 +1,102 @@
 # GopherAI-Career-Engine
 
-GopherAI-Career-Engine is a Dockerized Go backend task processing system for career workflows.  
-The project is designed to be reproducible, explainable, and extensible, with an initial focus on asynchronous resume and job description analysis tasks.
+GopherAI-Career-Engine is a Dockerized Go backend for asynchronous career-analysis tasks. It uses RabbitMQ to decouple request handling from background processing, MySQL to persist task state and results, and Redis as supporting infrastructure for future extensions.
 
-## Why this project
+## Features
 
-Instead of building a generic AI chat demo, this project focuses on a concrete backend use case:
+- Asynchronous task processing with separate API and worker services
+- Multiple task types:
+    - `resume_analysis`
+    - `resume_jd_match`
+- Task lifecycle tracking:
+    - `pending`
+    - `queued`
+    - `processing`
+    - `completed`
+    - `failed`
+- Result persistence and task result query endpoints
+- Idempotent consumer handling with `processed_keys`
+- Versioned SQL migrations as the source of truth for schema
+- Reproducible local development with Docker Compose
+- Local validation with multiple worker instances
 
-- create career-related analysis tasks
-- process them asynchronously
-- persist task status and results
-- support future expansion into multiple career workflows
+## Tech Stack
 
-The goal is to demonstrate backend engineering skills through:
+- **Go** + **Gin**
+- **MySQL**
+- **RabbitMQ**
+- **Redis**
+- **GORM**
+- **SQL migrations**
+- **Docker Compose**
 
-- task lifecycle management
-- queue-based asynchronous processing
-- versioned SQL migrations
-- reproducible local development with Docker Compose
-- clean separation between API and worker responsibilities
+## Architecture
 
-## Current architecture
+1. Client submits a task request
+2. API stores the task in MySQL
+3. API publishes a message to RabbitMQ
+4. Worker consumes the message and processes the task
+5. Worker updates task state and stores the result
+6. Client queries task status or result through the API
 
-### Stack
+## Current Endpoints
 
-- **Go + Gin** for the backend API
-- **MySQL** for persistent storage
-- **Redis** for cache / short-lived state
-- **RabbitMQ** for asynchronous task delivery
-- **GORM** for database access
-- **SQL migrations** as the single source of truth for schema
-- **Docker Compose** for local reproducible development
+- `POST /tasks/resume-analysis`
+- `POST /tasks/resume-jd-match`
+- `GET /tasks`
+- `GET /tasks/:id`
+- `GET /tasks/:id/result`
+- `GET /health`
+- `GET /debug/db`
 
-### Current system direction
-
-The system is being built as a **career task engine**, not a chat-first application.
-
-Initial v1 workflow:
-
-1. client submits a career analysis task
-2. API creates a task record in MySQL
-3. task is queued for asynchronous processing
-4. worker processes the task
-5. task result is persisted and can be queried later
-
-## Current progress
-
-### Completed
-
-- Docker Compose local environment
-- MySQL / Redis / RabbitMQ service startup
-- API health endpoint
-- GORM MySQL initialization
-- `/debug/db` database connectivity check
-- versioned SQL migrations
-- initial `tasks` table for task processing workflows
-
-### In progress
-
-- task repository
-- task creation / query endpoints
-- RabbitMQ producer / consumer flow
-- async worker processing
-- task status transitions
-- idempotent message handling with `processed_keys`
-
-## Database design
-
-Current core tables include:
-
-- `users`
-- `tasks`
-- `processed_keys`
-- `schema_migrations`
-
-The `tasks` table is designed around an async processing lifecycle:
-
-- `task_type`
-- `status`
-- `input_payload`
-- `result_payload`
-- `error_message`
-- `retry_count`
-- `started_at`
-- `completed_at`
-
-## Task lifecycle
-
-Planned task states:
-
-- `pending`
-- `queued`
-- `processing`
-- `completed`
-- `failed`
-
-This makes task execution observable and allows future support for retries and worker scaling.
-
-## Local development
-
-### Requirements
-
-- Docker
-- Docker Compose
+## Local Development
 
 ### Start services
 
 ```bash
-make up
+docker compose up -d --build
 ```
-### Check service health
+
+### Run migrations
 
 ```bash
-curl http://localhost:8080/health
+make migrate-up
 ```
 
-### Check database connectivity
+### Example requests
+
+Create a resume analysis task:
 
 ```bash
-curl http://localhost:8080/debug/db
+curl -s -X POST http://localhost:8080/tasks/resume-analysis \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":1,"resume_text":"Backend engineer with Go, MySQL, Redis, RabbitMQ, Docker, and REST API experience."}'
 ```
 
-### Example health response
+Create a resume-JD match task:
 
-```json
-{
-  "env": "dev",
-  "mysql": "true",
-  "redis": "true",
-  "rabbitmq": "true",
-  "ok": true
-}
+```bash
+curl -s -X POST http://localhost:8080/tasks/resume-jd-match \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":1,"resume_text":"Backend engineer with Go, MySQL, Redis, RabbitMQ, Docker, and REST API experience.","job_description_text":"We are looking for a backend engineer with Go, Docker, AWS, Kubernetes, and distributed systems experience."}'
 ```
+
+List tasks:
+
+```bash
+curl -s "http://localhost:8080/tasks?user_id=1&limit=10"
+```
+
+## Notes
+
+- The worker supports multiple task types through a shared queue-based pipeline.
+- Duplicate message processing is mitigated with `processed_keys`.
+- Failed tasks persist error information and retry counts.
+- The current implementation uses a mock analyzer for deterministic local testing.
+
+## Roadmap
+
+- Automatic retry policy for failed tasks
+- More realistic analysis backend
+- Additional task types
+- Further cloud deployment and scaling improvements
