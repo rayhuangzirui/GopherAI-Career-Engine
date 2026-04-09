@@ -3,8 +3,9 @@ package repository
 import (
 	"context"
 	"errors"
-	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
 	"time"
+
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
 
 	"gorm.io/gorm"
 )

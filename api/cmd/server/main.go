@@ -96,6 +96,7 @@ func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB, taskPublishe
 	})
 
 	r.POST("/tasks/resume-analysis", taskHandler.CreateResumeAnalysisTask)
+	r.POST("/tasks/resume-jd-match", taskHandler.CreateResumeJDMatchTask)
 	r.GET("/tasks/:id", taskHandler.GetTask)
 	r.GET("/tasks/:id/result", taskHandler.GetTaskResult)
 }

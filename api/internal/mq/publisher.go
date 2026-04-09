@@ -17,42 +17,22 @@ type TaskPublisher struct {
 }
 
 func NewTaskPublisher(rabbitURL string) (*TaskPublisher, error) {
-	conn, err := amqp.Dial(rabbitURL)
+	conn, ch, q, err := setupQueue(rabbitURL, TaskQueueName)
 	if err != nil {
-		return nil, fmt.Errorf("dial rabbitmq: %w", err)
+		return nil, err
 	}
 
-	channel, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("open rabbitmq channel: %w", err)
-	}
-
-	q, err := channel.QueueDeclare(
-		TaskQueueName,
-		true,  // durable
-		false, // delete when unused
-		false, // exclusive
-		false, // no-wait
-		nil,
-	)
-	if err != nil {
-		_ = channel.Close()
-		_ = conn.Close()
-		return nil, fmt.Errorf("declare rabbitmq queue: %w", err)
-	}
-
-	return &TaskPublisher{conn: conn, channel: channel, queue: q}, nil
+	return &TaskPublisher{conn: conn, channel: ch, queue: q}, nil
 }
 
-func BuildTaskMessageKey(taskID int64) string {
-	return fmt.Sprintf("resume_analysis:%d", taskID)
+func BuildTaskMessageKey(taskType string, taskID int64) string {
+	return fmt.Sprintf("%s:%d", taskType, taskID)
 }
 
-func (p *TaskPublisher) PublishTask(ctx context.Context, taskID int64) error {
+func (p *TaskPublisher) PublishTask(ctx context.Context, taskID int64, taskType string) error {
 	msg := TaskMessage{
 		TaskID:     taskID,
-		MessageKey: BuildTaskMessageKey(taskID),
+		MessageKey: BuildTaskMessageKey(taskType, taskID),
 	}
 
 	body, err := json.Marshal(msg)
@@ -81,11 +61,5 @@ func (p *TaskPublisher) PublishTask(ctx context.Context, taskID int64) error {
 }
 
 func (p *TaskPublisher) Close() error {
-	if p.channel != nil {
-		_ = p.channel.Close()
-	}
-	if p.conn != nil {
-		return p.conn.Close()
-	}
-	return nil
+	return closeAMQPResources(p.channel, p.conn)
 }

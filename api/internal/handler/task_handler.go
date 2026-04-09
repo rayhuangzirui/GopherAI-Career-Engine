@@ -14,7 +14,7 @@ import (
 )
 
 type TaskPublisher interface {
-	PublishTask(ctx context.Context, taskID int64) error
+	PublishTask(ctx context.Context, taskID int64, taskType string) error
 }
 
 type TaskHandler struct {
@@ -34,13 +34,15 @@ type CreateResumeAnalysisTaskRequest struct {
 	ResumeText string `json:"resume_text" binding:"required"`
 }
 
+type CreateResumeJDMatchTaskRequest struct {
+	UserID             int64  `json:"user_id" binding:"required"`
+	ResumeText         string `json:"resume_text" binding:"required"`
+	JobDescriptionText string `json:"job_description_text" binding:"required"`
+}
+
 func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 	var req CreateResumeAnalysisTaskRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"ok":    false,
-			"error": "invalid request body",
-		})
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -48,73 +50,26 @@ func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 		ResumeText: req.ResumeText,
 	}
 
-	inputBytes, err := json.Marshal(input)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": "failed to marshal task input",
-		})
+	h.createTask(c, req.UserID, model.TaskTypeResumeAnalysis, input)
+}
+
+func (h *TaskHandler) CreateResumeJDMatchTask(c *gin.Context) {
+	var req CreateResumeJDMatchTaskRequest
+	if !bindJSON(c, &req) {
 		return
 	}
 
-	task := &model.Task{
-		UserID:       req.UserID,
-		TaskType:     model.TaskTypeResumeAnalysis,
-		Status:       model.TaskStatusPending,
-		InputPayload: string(inputBytes),
+	input := model.ResumeJDMatchInput{
+		ResumeText:         req.ResumeText,
+		JobDescriptionText: req.JobDescriptionText,
 	}
 
-	if err := h.taskRepo.CreateTask(c.Request.Context(), task); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": err.Error(),
-		})
-		return
-	}
-
-	if err := h.publisher.PublishTask(c.Request.Context(), task.ID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": err.Error(),
-		})
-		return
-	}
-
-	if err := h.taskRepo.MarkQueued(c.Request.Context(), task.ID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"ok":      true,
-		"task_id": task.ID,
-		"status":  model.TaskStatusQueued,
-	})
+	h.createTask(c, req.UserID, model.TaskTypeResumeJDMatch, input)
 }
 
 func (h *TaskHandler) GetTask(c *gin.Context) {
-	taskID, ok := parseTaskID(c)
+	task, ok := h.getTaskOrRespond(c)
 	if !ok {
-		return
-	}
-
-	task, err := h.taskRepo.GetTask(c.Request.Context(), taskID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"ok":    false,
-				"error": "task not found",
-			})
-			return
-		}
-
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": err.Error(),
-		})
 		return
 	}
 
@@ -127,34 +82,17 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 		//"input_payload": task.InputPayload,
 		//"result_payload": task.ResultPayload,
 		"error_message": task.ErrorMessage,
-		"retry_count":  task.RetryCount,
-		"started_at":   task.StartedAt,
-		"completed_at": task.CompletedAt,
-		"created_at":   task.CreatedAt,
-		"updated_at":   task.UpdatedAt,
+		"retry_count":   task.RetryCount,
+		"started_at":    task.StartedAt,
+		"completed_at":  task.CompletedAt,
+		"created_at":    task.CreatedAt,
+		"updated_at":    task.UpdatedAt,
 	})
 }
 
 func (h *TaskHandler) GetTaskResult(c *gin.Context) {
-	taskID, ok := parseTaskID(c)
+	task, ok := h.getTaskOrRespond(c)
 	if !ok {
-		return
-	}
-
-	task, err := h.taskRepo.GetTask(c.Request.Context(), taskID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{
-				"ok":    false,
-				"error": "task not found",
-			})
-			return
-		}
-
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": err.Error(),
-		})
 		return
 	}
 
@@ -192,6 +130,90 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 		})
 		return
 	}
+}
+
+func (h *TaskHandler) createTask(c *gin.Context, userID int64, taskType string, input any) {
+	inputBytes, err := json.Marshal(input)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": "failed to marshal task input",
+		})
+		return
+	}
+
+	task := &model.Task{
+		UserID:       userID,
+		TaskType:     taskType,
+		Status:       model.TaskStatusPending,
+		InputPayload: string(inputBytes),
+	}
+
+	if err := h.taskRepo.CreateTask(c.Request.Context(), task); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if err := h.publisher.PublishTask(c.Request.Context(), task.ID, taskType); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if err := h.taskRepo.MarkQueued(c.Request.Context(), task.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"ok":      true,
+		"task_id": task.ID,
+		"status":  model.TaskStatusQueued,
+	})
+}
+
+func (h *TaskHandler) getTaskOrRespond(c *gin.Context) (*model.Task, bool) {
+	taskID, ok := parseTaskID(c)
+	if !ok {
+		return nil, false
+	}
+
+	task, err := h.taskRepo.GetTask(c.Request.Context(), taskID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"ok":    false,
+				"error": "task not found",
+			})
+			return nil, false
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return nil, false
+	}
+
+	return task, true
+}
+
+func bindJSON[T any](c *gin.Context, req *T) bool {
+	if err := c.ShouldBindJSON(req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return false
+	}
+	return true
 }
 
 func parseTaskID(c *gin.Context) (int64, bool) {

@@ -3,6 +3,7 @@ package mq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/analyzer"
 )
+
+var errTaskMarkedFailed = fmt.Errorf("task marked failed")
 
 type TaskConsumer struct {
 	conn             *amqp.Connection
@@ -27,29 +30,9 @@ func NewTaskConsumer(
 	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
 ) (*TaskConsumer, error) {
-	conn, err := amqp.Dial(rabbitMQURL)
+	conn, ch, q, err := setupQueue(rabbitMQURL, TaskQueueName)
 	if err != nil {
-		return nil, fmt.Errorf("dial rabbitmq: %w", err)
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("open rabbitmq channel: %w", err)
-	}
-
-	q, err := ch.QueueDeclare(
-		TaskQueueName,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, fmt.Errorf("declare rabbitmq queue: %w", err)
+		return nil, err
 	}
 
 	return &TaskConsumer{
@@ -127,43 +110,16 @@ func (c *TaskConsumer) handleMessage(ctx context.Context, msg amqp.Delivery) err
 		return fmt.Errorf("get task %d: %w", taskMessage.TaskID, err)
 	}
 
-	if task.TaskType != model.TaskTypeResumeAnalysis {
-		failErr := c.taskRepo.MarkFailed(ctx, task.ID, "unsupported task type")
-		if failErr != nil {
-			return fmt.Errorf("unsupported task type and mark failed: %w", failErr)
-		}
-		return nil
-	}
-
 	if err := c.taskRepo.MarkProcessing(ctx, task.ID); err != nil {
 		return fmt.Errorf("mark processing task %d: %w", task.ID, err)
 	}
 
-	var input model.ResumeAnalysisInput
-	if err := json.Unmarshal([]byte(task.InputPayload), &input); err != nil {
-		failErr := c.taskRepo.MarkFailed(ctx, task.ID, "failed to parse input payload")
-		if failErr != nil {
-			return fmt.Errorf("parse input payload: %v; mark failed: %w", err, failErr)
-		}
-
-		return nil
-	}
-
-	result, err := c.analyzer.AnalyzeResume(input)
+	resultBytes, err := c.executeTask(ctx, task)
 	if err != nil {
-		failErr := c.taskRepo.MarkFailed(ctx, task.ID, err.Error())
-		if failErr != nil {
-			return fmt.Errorf("analyze task: %v; mark failed: %w", err, failErr)
+		if errors.Is(err, errTaskMarkedFailed) {
+			return nil
 		}
-		return nil
-	}
-	resultBytes, err := json.Marshal(result)
-	if err != nil {
-		failErr := c.taskRepo.MarkFailed(ctx, task.ID, "failed to marshal result payload")
-		if failErr != nil {
-			return fmt.Errorf("marshal result payload: %v; mark failed: %w", err, failErr)
-		}
-		return nil
+		return err
 	}
 
 	if err := c.taskRepo.MarkCompleted(ctx, task.ID, string(resultBytes)); err != nil {
@@ -178,12 +134,65 @@ func (c *TaskConsumer) handleMessage(ctx context.Context, msg amqp.Delivery) err
 	return nil
 }
 
+func (c *TaskConsumer) executeTask(ctx context.Context, task *model.Task) ([]byte, error) {
+	switch task.TaskType {
+	case model.TaskTypeResumeAnalysis:
+		return c.handleResumeAnalysis(ctx, task)
+	case model.TaskTypeResumeJDMatch:
+		return c.handleResumeJDMatch(ctx, task)
+	default:
+		return nil, c.failTask(ctx, task.ID, "unsupported task type", nil)
+	}
+}
+
+func (c *TaskConsumer) handleResumeAnalysis(ctx context.Context, task *model.Task) ([]byte, error) {
+	var input model.ResumeAnalysisInput
+	if err := json.Unmarshal([]byte(task.InputPayload), &input); err != nil {
+		return nil, c.failTask(ctx, task.ID, "failed to parse input payload", err)
+	}
+
+	result, err := c.analyzer.AnalyzeResume(input)
+	if err != nil {
+		return nil, c.failTask(ctx, task.ID, err.Error(), err)
+	}
+
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return nil, c.failTask(ctx, task.ID, "failed to marshal result payload", err)
+	}
+
+	return resultBytes, nil
+}
+
+func (c *TaskConsumer) handleResumeJDMatch(ctx context.Context, task *model.Task) ([]byte, error) {
+	var input model.ResumeJDMatchInput
+	if err := json.Unmarshal([]byte(task.InputPayload), &input); err != nil {
+		return nil, c.failTask(ctx, task.ID, "failed to parse input payload", err)
+	}
+
+	result, err := c.analyzer.MatchResumeJD(input)
+	if err != nil {
+		return nil, c.failTask(ctx, task.ID, err.Error(), err)
+	}
+
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		return nil, c.failTask(ctx, task.ID, "failed to marshal result payload", err)
+	}
+
+	return resultBytes, nil
+}
+
+func (c *TaskConsumer) failTask(ctx context.Context, taskID int64, message string, cause error) error {
+	if err := c.taskRepo.MarkFailed(ctx, taskID, message); err != nil {
+		if cause != nil {
+			return fmt.Errorf("%s: %v; mark faild: %w", message, cause, err)
+		}
+		return fmt.Errorf("%s: %v", message, err)
+	}
+	return errTaskMarkedFailed
+}
+
 func (c *TaskConsumer) Close() error {
-	if c.channel != nil {
-		_ = c.channel.Close()
-	}
-	if c.conn != nil {
-		return c.conn.Close()
-	}
-	return nil
+	return closeAMQPResources(c.channel, c.conn)
 }

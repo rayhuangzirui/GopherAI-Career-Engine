@@ -2,8 +2,9 @@ package analyzer
 
 import (
 	"errors"
-	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
 	"strings"
+
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
 )
 
 type MockAnalyzer struct{}
@@ -36,6 +37,30 @@ func (a *MockAnalyzer) AnalyzeResume(input model.ResumeAnalysisInput) (model.Res
 		Suggestions: []string{
 			"Add measurable backend impact",
 			"Highlight distributed systems experience",
+		},
+	}, nil
+}
+
+func (a *MockAnalyzer) MatchResumeJD(input model.ResumeJDMatchInput) (model.ResumeJDMatchResult, error) {
+	if strings.Contains(input.ResumeText, "FAIL_ANALYSIS") ||
+		strings.Contains(input.JobDescriptionText, "FAIL_ANALYSIS") {
+		return model.ResumeJDMatchResult{}, errors.New("mock matcher failed: simulated analysis error")
+	}
+
+	return model.ResumeJDMatchResult{
+		MatchScore: 80,
+		MatchedKeywords: []string{
+			"Go",
+			"Docker",
+			"REST APIs",
+		},
+		MissingKeywords: []string{
+			"Kubernetes",
+			"AWS",
+		},
+		Suggestions: []string{
+			"Add more distributed system impact",
+			"Mention cloud deployment experience",
 		},
 	}, nil
 }
