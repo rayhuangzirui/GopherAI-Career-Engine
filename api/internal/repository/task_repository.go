@@ -75,11 +75,75 @@ func (r *TaskRepository) MarkProcessing(ctx context.Context, id int64) error {
 
 	tx := r.db.WithContext(ctx).
 		Model(&model.Task{}).
-		Where("id = ? AND status = ?", id, model.TaskStatusQueued).
+		Where("id = ? AND status IN ?", id, []string{
+			model.TaskStatusPending,
+			model.TaskStatusQueued,
+			model.TaskStatusRetrying,
+		}).
 		Updates(map[string]interface{}{
 			"status":     model.TaskStatusProcessing,
 			"started_at": &now,
 		})
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	if tx.RowsAffected == 0 {
+		return ErrInvalidStateTransition
+	}
+
+	return nil
+}
+
+func (r *TaskRepository) MarkRetrying(ctx context.Context, id int64, errorMessage string) error {
+	tx := r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ? AND status = ?", id, model.TaskStatusProcessing).
+		Updates(map[string]interface{}{
+			"status":        model.TaskStatusRetrying,
+			"error_message": errorMessage,
+			"retry_count":   gorm.Expr("retry_count + 1"),
+		})
+
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	if tx.RowsAffected == 0 {
+		return ErrInvalidStateTransition
+	}
+	return nil
+}
+
+func (r *TaskRepository) RequeueFromRetrying(ctx context.Context, id int64) error {
+	tx := r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ? AND status = ?", id, model.TaskStatusRetrying).
+		Updates(map[string]interface{}{
+			"status": model.TaskStatusQueued,
+		})
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	if tx.RowsAffected == 0 {
+		return ErrInvalidStateTransition
+	}
+	return nil
+}
+
+func (r *TaskRepository) MarkPermanentlyFailed(ctx context.Context, id int64, errorMessage string) error {
+	now := time.Now()
+
+	tx := r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ? AND status = ?", id, model.TaskStatusProcessing).
+		Updates(map[string]interface{}{
+			"status":        model.TaskStatusPermanentlyFailed,
+			"error_message": errorMessage,
+			"completed_at":  &now,
+		})
+
 	if tx.Error != nil {
 		return tx.Error
 	}

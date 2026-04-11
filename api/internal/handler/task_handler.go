@@ -14,7 +14,7 @@ import (
 )
 
 type TaskPublisher interface {
-	PublishTask(ctx context.Context, taskID int64, taskType string) error
+	PublishTask(ctx context.Context, taskID int64, taskType string, attempt int) error
 }
 
 type TaskHandler struct {
@@ -115,7 +115,7 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 			"result": result,
 		})
 		return
-	case model.TaskStatusFailed:
+	case model.TaskStatusPermanentlyFailed:
 		c.JSON(http.StatusOK, gin.H{
 			"ok":            false,
 			"status":        task.Status,
@@ -199,7 +199,7 @@ func (h *TaskHandler) createTask(c *gin.Context, userID int64, taskType string, 
 		return
 	}
 
-	if err := h.publisher.PublishTask(c.Request.Context(), task.ID, taskType); err != nil {
+	if err := h.publisher.PublishTask(c.Request.Context(), task.ID, taskType, 0); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"ok":    false,
 			"error": err.Error(),

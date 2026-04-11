@@ -4,7 +4,6 @@ import "time"
 
 const (
 	TaskTypeResumeAnalysis = "resume_analysis"
-	TaskTypeJDAnalysis     = "jd_analysis"
 	TaskTypeResumeJDMatch  = "resume_jd_match"
 )
 
@@ -14,8 +13,9 @@ const (
 	TaskStatusProcessing        = "processing"
 	TaskStatusCompleted         = "completed"
 	TaskStatusFailed            = "failed"
+	TaskStatusRetrying          = "retrying"
 	TaskStatusPermanentlyFailed = "permanently_failed"
-	TaskStatusCancelled         = "cancelled"
+	//TaskStatusCancelled         = "cancelled"
 	//TaskStatusExpired = "expired"
 	//TaskStatusRetried = "retried"
 	//TaskStatusTimeout = "timeout"

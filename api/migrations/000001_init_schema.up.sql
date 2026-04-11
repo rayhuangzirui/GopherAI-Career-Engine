@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- Idempotency keys for MQ consumer
 CREATE TABLE IF NOT EXISTS processed_keys (
     id BIGINT NOT NULL AUTO_INCREMENT,
-    key_value VARCHAR(100) NOT NULL,
+    key_value VARCHAR(191) NOT NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     PRIMARY KEY (id),

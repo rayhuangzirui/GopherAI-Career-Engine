@@ -25,14 +25,16 @@ func NewTaskPublisher(rabbitURL string) (*TaskPublisher, error) {
 	return &TaskPublisher{conn: conn, channel: ch, queue: q}, nil
 }
 
-func BuildTaskMessageKey(taskType string, taskID int64) string {
-	return fmt.Sprintf("%s:%d", taskType, taskID)
+func BuildTaskMessageKey(taskType string, taskID int64, attempt int) string {
+	return fmt.Sprintf("%s:%d:attempt:%d", taskType, taskID, attempt)
 }
 
-func (p *TaskPublisher) PublishTask(ctx context.Context, taskID int64, taskType string) error {
+func (p *TaskPublisher) PublishTask(ctx context.Context, taskID int64, taskType string, attempt int) error {
 	msg := TaskMessage{
 		TaskID:     taskID,
-		MessageKey: BuildTaskMessageKey(taskType, taskID),
+		TaskType: 	taskType,
+		Attempt: 	attempt,
+		MessageKey: BuildTaskMessageKey(taskType, taskID, attempt),
 	}
 
 	body, err := json.Marshal(msg)

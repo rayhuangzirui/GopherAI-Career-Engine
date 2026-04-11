@@ -13,7 +13,22 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/analyzer"
 )
 
-var errTaskMarkedFailed = fmt.Errorf("task marked failed")
+type TaskExecError struct {
+	Message   string
+	Cause     error
+	Retryable bool
+}
+
+func (e *TaskExecError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s", e.Message)
+	}
+	return e.Message
+}
+
+type RetryConfig struct {
+	MaxRetries int
+}
 
 type TaskConsumer struct {
 	conn             *amqp.Connection
@@ -22,6 +37,8 @@ type TaskConsumer struct {
 	taskRepo         *repository.TaskRepository
 	processedKeyRepo *repository.ProcessedKeyRepository
 	analyzer         analyzer.Analyzer
+	publisher        *TaskPublisher
+	retryConfig      RetryConfig
 }
 
 func NewTaskConsumer(
@@ -29,11 +46,14 @@ func NewTaskConsumer(
 	taskRepo *repository.TaskRepository,
 	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
+	retryConfig RetryConfig,
 ) (*TaskConsumer, error) {
 	conn, ch, q, err := setupQueue(rabbitMQURL, TaskQueueName)
 	if err != nil {
 		return nil, err
 	}
+
+	publisher := &TaskPublisher{conn: conn, channel: ch, queue: q}
 
 	return &TaskConsumer{
 		conn:             conn,
@@ -42,6 +62,8 @@ func NewTaskConsumer(
 		taskRepo:         taskRepo,
 		processedKeyRepo: processedKeyRepo,
 		analyzer:         analyzer,
+		publisher:        publisher,
+		retryConfig:      retryConfig,
 	}, nil
 }
 
@@ -111,26 +133,77 @@ func (c *TaskConsumer) handleMessage(ctx context.Context, msg amqp.Delivery) err
 	}
 
 	if err := c.taskRepo.MarkProcessing(ctx, task.ID); err != nil {
+		if errors.Is(err, repository.ErrInvalidStateTransition) {
+			log.Printf("skip task due to invalid transition to processing: key=%s task_id=%d", taskMessage.MessageKey, taskMessage.TaskID)
+			return nil
+		}
 		return fmt.Errorf("mark processing task %d: %w", task.ID, err)
 	}
 
-	resultBytes, err := c.executeTask(ctx, task)
-	if err != nil {
-		if errors.Is(err, errTaskMarkedFailed) {
-			return nil
+	resultBytes, execErr := c.executeTask(ctx, task)
+	if execErr == nil {
+		if err := c.taskRepo.MarkCompleted(ctx, task.ID, string(resultBytes)); err != nil {
+			return fmt.Errorf("mark completed task %d: %w", task.ID, err)
 		}
-		return err
+
+		if err := c.processedKeyRepo.Create(ctx, taskMessage.MessageKey); err != nil {
+			return fmt.Errorf("create processed key %q: %w", taskMessage.MessageKey, err)
+		}
+
+		log.Printf("task %d completed", task.ID)
+		return nil
 	}
 
-	if err := c.taskRepo.MarkCompleted(ctx, task.ID, string(resultBytes)); err != nil {
-		return fmt.Errorf("mark completed task %d: %w", task.ID, err)
+	var taskErr *TaskExecError
+	ok := errors.As(execErr, &taskErr)
+	if !ok {
+		return fmt.Errorf("execute task %d: unexpected task execution type: %w", task.ID, execErr)
+	}
+
+	if !taskErr.Retryable {
+		if err := c.taskRepo.MarkPermanentlyFailed(ctx, task.ID, taskErr.Error()); err != nil {
+			return fmt.Errorf("mark permanently failed task %d: %w", task.ID, err)
+		}
+
+		if err := c.processedKeyRepo.Create(ctx, taskMessage.MessageKey); err != nil {
+			return fmt.Errorf("create processed key %q: %w", taskMessage.MessageKey, err)
+		}
+		log.Printf("task %d permanently failed (non-retryable): %s", task.ID, taskErr.Error())
+		return nil
+	}
+
+	// retryable
+	if task.RetryCount >= c.retryConfig.MaxRetries {
+		if err := c.taskRepo.MarkPermanentlyFailed(ctx, task.ID, taskErr.Error()); err != nil {
+			return fmt.Errorf("mark permanently failed task %d: %w", task.ID, err)
+		}
+
+		if err := c.processedKeyRepo.Create(ctx, taskMessage.MessageKey); err != nil {
+			return fmt.Errorf("create processed key %q: %w", taskMessage.MessageKey, err)
+		}
+		log.Printf("task %d permanently failed (max retries reached): %s", task.ID, taskErr.Error())
+		return nil
+	}
+
+	if err := c.taskRepo.MarkRetrying(ctx, task.ID, taskErr.Error()); err != nil {
+		return fmt.Errorf("mark retrying task %d: %w", task.ID, err)
+	}
+
+	nextAttempt := taskMessage.Attempt + 1
+
+	if err := c.publisher.PublishTask(ctx, task.ID, task.TaskType, nextAttempt); err != nil {
+		return fmt.Errorf("republish retry task %d attempt %d: %w", task.ID, nextAttempt, err)
+	}
+
+	if err := c.taskRepo.RequeueFromRetrying(ctx, task.ID); err != nil {
+		return fmt.Errorf("requeue retrying task %d: %w", task.ID, err)
 	}
 
 	if err := c.processedKeyRepo.Create(ctx, taskMessage.MessageKey); err != nil {
 		return fmt.Errorf("create processed key %q: %w", taskMessage.MessageKey, err)
 	}
 
-	log.Printf("task %d completed\n", task.ID)
+	log.Printf("task %d requeued (attempt %d)", task.ID, nextAttempt)
 	return nil
 }
 
@@ -141,24 +214,40 @@ func (c *TaskConsumer) executeTask(ctx context.Context, task *model.Task) ([]byt
 	case model.TaskTypeResumeJDMatch:
 		return c.handleResumeJDMatch(ctx, task)
 	default:
-		return nil, c.failTask(ctx, task.ID, "unsupported task type", nil)
+		return nil, &TaskExecError{
+			Message:   "unsupported task type",
+			Cause:     nil,
+			Retryable: false,
+		}
 	}
 }
 
 func (c *TaskConsumer) handleResumeAnalysis(ctx context.Context, task *model.Task) ([]byte, error) {
 	var input model.ResumeAnalysisInput
 	if err := json.Unmarshal([]byte(task.InputPayload), &input); err != nil {
-		return nil, c.failTask(ctx, task.ID, "failed to parse input payload", err)
+		return nil, &TaskExecError{
+			Message:   "failed to parse input payload",
+			Cause:     err,
+			Retryable: false,
+		}
 	}
 
 	result, err := c.analyzer.AnalyzeResume(input)
 	if err != nil {
-		return nil, c.failTask(ctx, task.ID, err.Error(), err)
+		return nil, &TaskExecError{
+			Message:   err.Error(),
+			Cause:     err,
+			Retryable: true,
+		}
 	}
 
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
-		return nil, c.failTask(ctx, task.ID, "failed to marshal result payload", err)
+		return nil, &TaskExecError{
+			Message:   "failed to marshal result payload",
+			Cause:     err,
+			Retryable: false,
+		}
 	}
 
 	return resultBytes, nil
@@ -167,30 +256,45 @@ func (c *TaskConsumer) handleResumeAnalysis(ctx context.Context, task *model.Tas
 func (c *TaskConsumer) handleResumeJDMatch(ctx context.Context, task *model.Task) ([]byte, error) {
 	var input model.ResumeJDMatchInput
 	if err := json.Unmarshal([]byte(task.InputPayload), &input); err != nil {
-		return nil, c.failTask(ctx, task.ID, "failed to parse input payload", err)
+		return nil, &TaskExecError{
+			Message:   "failed to parse input payload",
+			Cause:     err,
+			Retryable: false,
+		}
 	}
 
 	result, err := c.analyzer.MatchResumeJD(input)
 	if err != nil {
-		return nil, c.failTask(ctx, task.ID, err.Error(), err)
+		return nil, &TaskExecError{
+			Message:   err.Error(),
+			Cause:     err,
+			Retryable: true,
+		}
 	}
 
 	resultBytes, err := json.Marshal(result)
 	if err != nil {
-		return nil, c.failTask(ctx, task.ID, "failed to marshal result payload", err)
+		return nil, &TaskExecError{
+			Message:   "failed to marshal result payload",
+			Cause:     err,
+			Retryable: false,
+		}
 	}
 
 	return resultBytes, nil
 }
 
-func (c *TaskConsumer) failTask(ctx context.Context, taskID int64, message string, cause error) error {
-	if err := c.taskRepo.MarkFailed(ctx, taskID, message); err != nil {
-		if cause != nil {
-			return fmt.Errorf("%s: %v; mark faild: %w", message, cause, err)
-		}
-		return fmt.Errorf("%s: %v", message, err)
-	}
-	return errTaskMarkedFailed
+func isRetryableError(err error) bool {
+	// Unretryable errors:
+	// failed to parse input payload
+	// failed to marshal result payload
+	// unsupported task type
+
+	// Retryable errors:
+	// analyzer returns runtime error
+	// analyzer returns analysis error
+	// LLM/external API call fails
+	return true
 }
 
 func (c *TaskConsumer) Close() error {

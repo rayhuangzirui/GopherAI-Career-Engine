@@ -35,6 +35,9 @@ func main() {
 		taskRepo,
 		processedKeyRepo,
 		mockAnalyzer,
+		mq.RetryConfig{
+			MaxRetries: 3,
+		},
 		10,
 		3*time.Second,
 	)
@@ -54,12 +57,13 @@ func initTaskConsumerWithRetry(
 	taskRepo *repository.TaskRepository,
 	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
+	retryConfig mq.RetryConfig,
 	maxAttempts int,
 	delay time.Duration,
 ) (*mq.TaskConsumer, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		consumer, err := mq.NewTaskConsumer(rabbitmqURL, taskRepo, processedKeyRepo, analyzer)
+		consumer, err := mq.NewTaskConsumer(rabbitmqURL, taskRepo, processedKeyRepo, analyzer, retryConfig)
 		if err == nil {
 			log.Printf("rabbitmq task consumer connected on attempt %d/%d", attempt, maxAttempts)
 			return consumer, nil

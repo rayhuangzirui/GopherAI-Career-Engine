@@ -37,9 +37,9 @@ func (r *ProcessedKeyRepository) Create(ctx context.Context, key string) error {
 
 	err := r.db.WithContext(ctx).Create(record).Error
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrProcessedKeyAlreadyExists
-		}
+		//if errors.Is(err, gorm.ErrRecordNotFound) {
+		//	return ErrProcessedKeyAlreadyExists
+		//}
 		return err
 	}
 
