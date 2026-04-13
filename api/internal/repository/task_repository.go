@@ -115,22 +115,22 @@ func (r *TaskRepository) MarkRetrying(ctx context.Context, id int64, errorMessag
 	return nil
 }
 
-func (r *TaskRepository) RequeueFromRetrying(ctx context.Context, id int64) error {
-	tx := r.db.WithContext(ctx).
-		Model(&model.Task{}).
-		Where("id = ? AND status = ?", id, model.TaskStatusRetrying).
-		Updates(map[string]interface{}{
-			"status": model.TaskStatusQueued,
-		})
-	if tx.Error != nil {
-		return tx.Error
-	}
-
-	if tx.RowsAffected == 0 {
-		return ErrInvalidStateTransition
-	}
-	return nil
-}
+//func (r *TaskRepository) RequeueFromRetrying(ctx context.Context, id int64) error {
+//	tx := r.db.WithContext(ctx).
+//		Model(&model.Task{}).
+//		Where("id = ? AND status = ?", id, model.TaskStatusRetrying).
+//		Updates(map[string]interface{}{
+//			"status": model.TaskStatusQueued,
+//		})
+//	if tx.Error != nil {
+//		return tx.Error
+//	}
+//
+//	if tx.RowsAffected == 0 {
+//		return ErrInvalidStateTransition
+//	}
+//	return nil
+//}
 
 func (r *TaskRepository) MarkPermanentlyFailed(ctx context.Context, id int64, errorMessage string) error {
 	now := time.Now()

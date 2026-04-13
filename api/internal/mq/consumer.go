@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
@@ -21,7 +22,7 @@ type TaskExecError struct {
 
 func (e *TaskExecError) Error() string {
 	if e.Cause != nil {
-		return fmt.Sprintf("%s", e.Message)
+		return fmt.Sprintf("%s: %v", e.Message, e.Cause)
 	}
 	return e.Message
 }
@@ -30,10 +31,24 @@ type RetryConfig struct {
 	MaxRetries int
 }
 
+func (c RetryConfig) DelayForAttemp(attempt int) time.Duration {
+	switch attempt {
+	case 1:
+		return 5 * time.Second
+	case 2:
+		return 10 * time.Second
+	case 3:
+		return 30 * time.Second
+	default:
+		return 60 * time.Second
+	}
+}
+
 type TaskConsumer struct {
 	conn             *amqp.Connection
-	channel          *amqp.Channel
-	queue            amqp.Queue
+	channel    		 *amqp.Channel
+	mainQueue  		 amqp.Queue
+	retryQueue 		 amqp.Queue
 	taskRepo         *repository.TaskRepository
 	processedKeyRepo *repository.ProcessedKeyRepository
 	analyzer         analyzer.Analyzer
@@ -48,17 +63,18 @@ func NewTaskConsumer(
 	analyzer analyzer.Analyzer,
 	retryConfig RetryConfig,
 ) (*TaskConsumer, error) {
-	conn, ch, q, err := setupQueue(rabbitMQURL, TaskQueueName)
+	conn, ch, mainQ, retryQ, err := setupTaskQueues(rabbitMQURL)
 	if err != nil {
 		return nil, err
 	}
 
-	publisher := &TaskPublisher{conn: conn, channel: ch, queue: q}
+	publisher := &TaskPublisher{conn: conn, channel: ch, mainQueue: mainQ, retryQueue: retryQ}
 
 	return &TaskConsumer{
 		conn:             conn,
 		channel:          ch,
-		queue:            q,
+		mainQueue:        mainQ,
+		retryQueue:       retryQ,
 		taskRepo:         taskRepo,
 		processedKeyRepo: processedKeyRepo,
 		analyzer:         analyzer,
@@ -69,7 +85,7 @@ func NewTaskConsumer(
 
 func (c *TaskConsumer) ConsumeTasks(ctx context.Context) error {
 	msgs, err := c.channel.Consume(
-		c.queue.Name,
+		c.mainQueue.Name,
 		"",
 		false,
 		false,
@@ -81,7 +97,7 @@ func (c *TaskConsumer) ConsumeTasks(ctx context.Context) error {
 		return fmt.Errorf("register rabbitmq consumer: %w", err)
 	}
 
-	log.Printf("worker consuming queue: %s\n", c.queue.Name)
+	log.Printf("worker consuming queue: %s\n", c.mainQueue.Name)
 
 	for {
 		select {
@@ -185,25 +201,30 @@ func (c *TaskConsumer) handleMessage(ctx context.Context, msg amqp.Delivery) err
 		return nil
 	}
 
+	nextAttempt := taskMessage.Attempt + 1
+	delay := c.retryConfig.DelayForAttemp(nextAttempt)
+
 	if err := c.taskRepo.MarkRetrying(ctx, task.ID, taskErr.Error()); err != nil {
 		return fmt.Errorf("mark retrying task %d: %w", task.ID, err)
 	}
 
-	nextAttempt := taskMessage.Attempt + 1
-
-	if err := c.publisher.PublishTask(ctx, task.ID, task.TaskType, nextAttempt); err != nil {
-		return fmt.Errorf("republish retry task %d attempt %d: %w", task.ID, nextAttempt, err)
+	if err := c.publisher.PublishRetryTask(ctx, task.ID, task.TaskType, nextAttempt, delay); err != nil {
+		return fmt.Errorf("publish retry task %d attempt %d after %s: %w", task.ID, nextAttempt, delay, err)
 	}
 
-	if err := c.taskRepo.RequeueFromRetrying(ctx, task.ID); err != nil {
-		return fmt.Errorf("requeue retrying task %d: %w", task.ID, err)
-	}
+	//if err := c.publisher.PublishTask(ctx, task.ID, task.TaskType, nextAttempt); err != nil {
+	//	return fmt.Errorf("republish retry task %d attempt %d: %w", task.ID, nextAttempt, err)
+	//}
+
+	//if err := c.taskRepo.RequeueFromRetrying(ctx, task.ID); err != nil {
+	//	return fmt.Errorf("requeue retrying task %d: %w", task.ID, err)
+	//}
 
 	if err := c.processedKeyRepo.Create(ctx, taskMessage.MessageKey); err != nil {
 		return fmt.Errorf("create processed key %q: %w", taskMessage.MessageKey, err)
 	}
 
-	log.Printf("task %d requeued (attempt %d)", task.ID, nextAttempt)
+	log.Printf("task %d scheduled retry attempt %d after %s", task.ID, nextAttempt, delay)
 	return nil
 }
 
@@ -235,7 +256,7 @@ func (c *TaskConsumer) handleResumeAnalysis(ctx context.Context, task *model.Tas
 	result, err := c.analyzer.AnalyzeResume(input)
 	if err != nil {
 		return nil, &TaskExecError{
-			Message:   err.Error(),
+			Message:   "resume analysis failed",
 			Cause:     err,
 			Retryable: true,
 		}
@@ -266,7 +287,7 @@ func (c *TaskConsumer) handleResumeJDMatch(ctx context.Context, task *model.Task
 	result, err := c.analyzer.MatchResumeJD(input)
 	if err != nil {
 		return nil, &TaskExecError{
-			Message:   err.Error(),
+			Message:   "resume JD match analysis failed",
 			Cause:     err,
 			Retryable: true,
 		}
