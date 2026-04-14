@@ -28,13 +28,15 @@ func main() {
 
 	taskRepo := repository.NewTaskRepository(db)
 	processedKeyRepo := repository.NewProcessedKeyRepository(db)
-	mockAnalyzer := analyzer.NewMockAnalyzer()
+	//mockAnalyzer := analyzer.NewMockAnalyzer()
+	ruleAnalyzer := analyzer.NewRulesAnalyzer()
 
 	consumer, err := initTaskConsumerWithRetry(
 		cfg.RabbitMQURL,
 		taskRepo,
 		processedKeyRepo,
-		mockAnalyzer,
+		//mockAnalyzer,
+		ruleAnalyzer,
 		mq.RetryConfig{
 			MaxRetries: 3,
 		},
