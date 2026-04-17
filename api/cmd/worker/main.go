@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -29,14 +30,18 @@ func main() {
 	taskRepo := repository.NewTaskRepository(db)
 	processedKeyRepo := repository.NewProcessedKeyRepository(db)
 	//mockAnalyzer := analyzer.NewMockAnalyzer()
-	ruleAnalyzer := analyzer.NewRulesAnalyzer()
+	//ruleAnalyzer := analyzer.NewRulesAnalyzer()
+	taskAnalyzer, err := buildAnalyzer(cfg)
+	if err != nil {
+		log.Fatalf("build analyzer failed: %v", err)
+	}
 
 	consumer, err := initTaskConsumerWithRetry(
 		cfg.RabbitMQURL,
 		taskRepo,
 		processedKeyRepo,
 		//mockAnalyzer,
-		ruleAnalyzer,
+		taskAnalyzer,
 		mq.RetryConfig{
 			MaxRetries: 3,
 		},
@@ -48,9 +53,24 @@ func main() {
 	}
 	defer consumer.Close()
 
-	log.Printf("worker started in %s mode, consuming queue %s", cfg.AppEnv, mq.TaskQueueName)
+	log.Printf("worker started in %s mode, consuming queue %s, analyzer_mode=%s, llm_provider=%s, llm_model=%s", cfg.AppEnv, mq.TaskQueueName, cfg.AnalyzerMode, cfg.LLMProvider, cfg.LLMModel)
 	if err := consumer.ConsumeTasks(context.Background()); err != nil {
 		log.Fatalf("consumer stopped with error: %v", err)
+	}
+}
+
+func buildAnalyzer(cfg *config.Config) (analyzer.Analyzer, error) {
+	switch cfg.AnalyzerMode {
+	case "rules":
+		return analyzer.NewRulesAnalyzer(), nil
+	case "llm":
+		if cfg.LLMAPIKey == "" {
+			return nil, fmt.Errorf("ANALYZER_MODE=llm but no LLM_API_KEY or DASHSCOPE_API_KEY is set")
+		}
+		fallback := analyzer.NewRulesAnalyzer()
+		return analyzer.NewLLMAnalyzer(cfg, fallback), nil
+	default:
+		return nil, fmt.Errorf("unknown analyzer mode: %s", cfg.AnalyzerMode)
 	}
 }
 

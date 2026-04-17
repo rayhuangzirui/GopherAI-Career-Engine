@@ -3,32 +3,53 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 )
 
 type Config struct {
-	AppEnv 		string
-	Port 		string
-	MySQLDSN 	string
-	RedisAddr 	string
+	AppEnv      string
+	Port        string
+	MySQLDSN    string
+	RedisAddr   string
 	RabbitMQURL string
-	JWTSecret 	string
+	JWTSecret   string
+
+	AnalyzerMode       string
+	LLMProvider        string
+	LLMBaseURL         string
+	LLMAPIKey          string
+	LLMModel           string
+	LLMTimeoutSeconds  int
+	LLMTemperature     float64
+	LLMMaxInputChars   int
+	LLMMaxOutputTokens int
 }
 
 var (
-	cfg 		*Config
-	once 		sync.Once
+	cfg  *Config
+	once sync.Once
 )
 
 func Load() *Config {
 	once.Do(func() {
 		cfg = &Config{
-			AppEnv: 		getEnv("APP_ENV", "dev"),
-			Port: 			getEnv("PORT", "8080"),
-			MySQLDSN: 		mustGetEnv("MYSQL_DSN"),
-			RedisAddr: 		mustGetEnv("REDIS_ADDR"),
-			RabbitMQURL: 	mustGetEnv("RABBITMQ_URL"),
-			JWTSecret: 		mustGetEnv("JWT_SECRET"),
+			AppEnv:      getEnv("APP_ENV", "dev"),
+			Port:        getEnv("PORT", "8080"),
+			MySQLDSN:    mustGetEnv("MYSQL_DSN"),
+			RedisAddr:   mustGetEnv("REDIS_ADDR"),
+			RabbitMQURL: mustGetEnv("RABBITMQ_URL"),
+			JWTSecret:   mustGetEnv("JWT_SECRET"),
+
+			AnalyzerMode:       getEnv("ANALYZER_MODE", "rules"),
+			LLMProvider:        getEnv("LLM_PROVIDER", "dashscope"),
+			LLMBaseURL:         getEnv("LLM_BASE_URL", "http://dashscope-us.aliyuncs.com/compatible-mode/v1"),
+			LLMAPIKey:          getEnv("LLM_API_KEY", getEnv("DASHSCOPE_API_KEY", "")),
+			LLMModel:           getEnv("LLM_MODEL", "qwen-plus"),
+			LLMTimeoutSeconds:  getEnvInt("LLM_TIMEOUT_SECONDS", 20),
+			LLMTemperature:     getEnvFloat("LLM_TEMPERATURE", 0.2),
+			LLMMaxInputChars:   getEnvInt("LLM_MAX_INPUT_CHARS", 8000),
+			LLMMaxOutputTokens: getEnvInt("LLM_MAX_OUTPUT_TOKENS", 800),
 		}
 	})
 	return cfg
@@ -48,4 +69,28 @@ func getEnv(key, def string) string {
 		return def
 	}
 	return value
+}
+
+func getEnvInt(key string, def int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return def
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		panic(fmt.Sprintf("invalid int environment variable %s=%q", key, value))
+	}
+	return parsed
+}
+
+func getEnvFloat(key string, def float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return def
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		panic(fmt.Sprintf("invalid float environment variable %s=%q", key, value))
+	}
+	return parsed
 }

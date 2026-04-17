@@ -111,6 +111,7 @@ func (a *RulesAnalyzer) AnalyzeResume(input model.ResumeAnalysisInput) (model.Re
 		ExperienceSummary: experienceSummary,
 		MissingKeywords:   missingKeywords,
 		Suggestions:       suggestions,
+		Source:            "rules",
 	}, nil
 }
 
@@ -160,6 +161,7 @@ func (a *RulesAnalyzer) MatchResumeJD(input model.ResumeJDMatchInput) (model.Res
 		MatchedKeywords: matched,
 		MissingKeywords: missing,
 		Suggestions:     suggestions,
+		Source:          "rules",
 	}, nil
 }
 

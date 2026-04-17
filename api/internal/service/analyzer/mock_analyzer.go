@@ -62,5 +62,6 @@ func (a *MockAnalyzer) MatchResumeJD(input model.ResumeJDMatchInput) (model.Resu
 			"Add more distributed system impact",
 			"Mention cloud deployment experience",
 		},
+		Source: "mock",
 	}, nil
 }

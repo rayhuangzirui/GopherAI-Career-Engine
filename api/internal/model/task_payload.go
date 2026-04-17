@@ -18,17 +18,15 @@ type ResumeAnalysisResult struct {
 	ExperienceSummary []string `json:"experience_summary"`
 	MissingKeywords   []string `json:"missing_keywords"`
 	Suggestions       []string `json:"suggestions"`
+	Source          	string   `json:"source,omitempty"`
 }
 
-type JDAnalysisResult struct {
-	KeyRequirements []string `json:"key_requirements"`
-	PreferredSkills []string `json:"preferred_skills"`
-	Summary         string   `json:"summary"`
-}
 
 type ResumeJDMatchResult struct {
 	MatchScore      int      `json:"match_score"`
 	MatchedKeywords []string `json:"matched_keywords"`
 	MissingKeywords []string `json:"missing_keywords"`
 	Suggestions     []string `json:"suggestions"`
+	SemanticAlignmentSummary string `json:"semantic_alignment_summary,omitempty"`
+	Source          string   `json:"source,omitempty"`
 }
