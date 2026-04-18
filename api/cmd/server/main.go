@@ -35,12 +35,29 @@ func main() {
 	defer taskPublisher.Close()
 
 	r := gin.Default()
+	r.Use(corsMiddleware())
 
 	registerRoutes(r, cfg, db, taskPublisher)
 
 	log.Printf("starting server on port %s in %s mode", cfg.Port, cfg.AppEnv)
 	if err := r.Run(":" + cfg.Port); err != nil {
 		log.Fatalf("run server failed: %v", err)
+	}
+}
+
+func corsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, Authorization, Origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
 	}
 }
 

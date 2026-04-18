@@ -1,65 +1,223 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useRef, useState } from "react";
+import { AnalysisForm } from "@/components/analysis-form";
+import { HistoryList } from "@/components/history-list";
+import { ResultReport } from "@/components/result-report";
+import { StatusCard } from "@/components/status-card";
+import {
+  createResumeJDMatchTask,
+  getTask,
+  getTaskHistory,
+  getTaskResult,
+} from "@/lib/api";
+import {
+  ResumeJDMatchResult,
+  TaskStatus,
+  TaskSummary,
+} from "@/lib/types";
+
+const FINAL_STATUSES: TaskStatus[] = ["completed", "failed", "permanently_failed"];
+type UiPhase = "preparing" | "comparing" | "generating" | null;
+
+export default function Page() {
+  const [taskId, setTaskId] = useState<number | null>(null);
+  const [status, setStatus] = useState<TaskStatus | null>(null);
+  const [retryCount, setRetryCount] = useState<number>(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [result, setResult] = useState<ResumeJDMatchResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [history, setHistory] = useState<TaskSummary[]>([]);
+
+  const [uiPhase, setUiPhase] = useState<UiPhase>(null);
+
+  const pollingRef = useRef<number | null>(null);
+  const phaseTimeoutsRef = useRef<number[]>([]);
+
+  function stopPolling() {
+    if (pollingRef.current !== null) {
+      window.clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }
+
+  function clearPhaseTimers() {
+    phaseTimeoutsRef.current.forEach((id) => window.clearTimeout(id));
+    phaseTimeoutsRef.current = [];
+  }
+
+  function scheduleUiPhases() {
+    clearPhaseTimers();
+    setUiPhase("preparing");
+
+    const comparingTimer = window.setTimeout(() => {
+      setUiPhase((current) => {
+        if (current === "preparing") return "comparing";
+        return current;
+      });
+    }, 700);
+
+    const generatingTimer = window.setTimeout(() => {
+      setUiPhase((current) => {
+        if (current === "preparing" || current === "comparing") return "generating";
+        return current;
+      });
+    }, 1800);
+
+    phaseTimeoutsRef.current = [comparingTimer, generatingTimer];
+  }
+
+  async function refreshHistory() {
+    try {
+      const data = await getTaskHistory(10);
+      setHistory(data.tasks ?? []);
+    } catch (error) {
+      console.error("Failed to fetch task history:", error);
+    }
+  }
+
+  function startPolling(id: number) {
+    stopPolling();
+
+    pollingRef.current = window.setInterval(async () => {
+      try {
+        const task = await getTask(id);
+        setStatus(task.status);
+        setRetryCount(task.retry_count);
+        setErrorMessage(task.error_message);
+
+        if (FINAL_STATUSES.includes(task.status)) {
+          stopPolling();
+          clearPhaseTimers();
+          setUiPhase(null);
+
+          if (task.status === "completed") {
+            const taskResult = await getTaskResult(id);
+            if (taskResult.result) {
+              setResult(taskResult.result);
+            }
+          }
+
+          await refreshHistory();
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error("Failed to fetch task status:", error);
+        stopPolling();
+        clearPhaseTimers();
+        setUiPhase(null);
+        setLoading(false);
+      }
+    }, 500);
+  }
+
+  async function handleSubmit(payload: {
+    resumeText: string;
+    jobDescriptionText: string;
+  }) {
+    setLoading(true);
+    setResult(null);
+    setErrorMessage(null);
+    setUiPhase("preparing");
+    scheduleUiPhases();
+
+    try {
+      const created = await createResumeJDMatchTask(payload);
+      console.log("created task response object:", created);
+
+      setTaskId(created.task_id);
+      setStatus(created.status);
+      setRetryCount(0);
+
+      startPolling(created.task_id);
+    } catch (error) {
+      console.error("Failed to create task:", error);
+      stopPolling();
+      clearPhaseTimers();
+      setUiPhase(null);
+      setLoading(false);
+    }
+  }
+
+  async function loadTaskFromHistory(selectedTaskId: number) {
+    stopPolling();
+    clearPhaseTimers();
+    setUiPhase(null);
+    setTaskId(selectedTaskId);
+    setResult(null);
+    setLoading(false);
+
+    try {
+      const task = await getTask(selectedTaskId);
+      setStatus(task.status);
+      setRetryCount(task.retry_count);
+      setErrorMessage(task.error_message);
+
+      if (task.status === "completed") {
+        const taskResult = await getTaskResult(selectedTaskId);
+        if (taskResult.result) {
+          setResult(taskResult.result);
+        }
+      } else if (!FINAL_STATUSES.includes(task.status)) {
+        setUiPhase("preparing");
+        scheduleUiPhases();
+        startPolling(selectedTaskId);
+      }
+    } catch (error) {
+      console.error("Failed to load task:", error);
+    }
+  }
+
+  useEffect(() => {
+    refreshHistory();
+
+    return () => {
+      stopPolling();
+      clearPhaseTimers();
+    };
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      <main className="min-h-screen bg-gray-50 px-6 py-10">
+        <div className="mx-auto max-w-7xl">
+          <div className="mb-8">
+            <div className="text-sm font-medium text-gray-500">Demo workspace</div>
+            <h1 className="mt-2 text-3xl font-bold text-gray-900">
+              Optimize your resume for a specific job
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm text-gray-600">
+              Submit your resume and a target job description to get a user-friendly
+              match report, keyword gaps, and prioritized improvement.
+            </p>
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="space-y-6">
+              <AnalysisForm onSubmit={handleSubmit} loading={loading} />
+              <HistoryList tasks={history} onSelect={loadTaskFromHistory} />
+            </div>
+
+            <div className="space-y-6">
+              {status && (
+                  <StatusCard
+                      status={status}
+                      retryCount={retryCount}
+                      errorMessage={errorMessage}
+                      uiPhase={uiPhase}
+                  />
+              )}
+
+              {taskId && (
+                  <div className="rounded-2xl border bg-white p-4 text-sm text-gray-600 shadow-sm">
+                    Current task ID:{" "}
+                    <span className="font-medium text-gray-900">#{taskId}</span>
+                  </div>
+              )}
+
+              {result && <ResultReport result={result} />}
+            </div>
+          </div>
         </div>
       </main>
-    </div>
   );
 }
