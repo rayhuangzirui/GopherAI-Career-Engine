@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/ratelimit"
 	"gorm.io/gorm"
 )
 
@@ -18,14 +21,18 @@ type TaskPublisher interface {
 }
 
 type TaskHandler struct {
-	taskRepo  *repository.TaskRepository
-	publisher TaskPublisher
+	taskRepo           *repository.TaskRepository
+	publisher          TaskPublisher
+	rateLimiter        *ratelimit.RateLimiter
+	rateLimitPerMinute int
 }
 
-func NewTaskHandler(taskRepo *repository.TaskRepository, publisher TaskPublisher) *TaskHandler {
+func NewTaskHandler(taskRepo *repository.TaskRepository, publisher TaskPublisher, rateLimiter *ratelimit.RateLimiter, rateLimitPerMinute int) *TaskHandler {
 	return &TaskHandler{
-		taskRepo:  taskRepo,
-		publisher: publisher,
+		taskRepo:           taskRepo,
+		publisher:          publisher,
+		rateLimiter:        rateLimiter,
+		rateLimitPerMinute: rateLimitPerMinute,
 	}
 }
 
@@ -46,6 +53,10 @@ func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 		return
 	}
 
+	if !h.enforceRateLimit(c, req.UserID, model.TaskTypeResumeAnalysis) {
+		return
+	}
+
 	input := model.ResumeAnalysisInput{
 		ResumeText: req.ResumeText,
 	}
@@ -56,6 +67,10 @@ func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 func (h *TaskHandler) CreateResumeJDMatchTask(c *gin.Context) {
 	var req CreateResumeJDMatchTaskRequest
 	if !bindJSON(c, &req) {
+		return
+	}
+
+	if !h.enforceRateLimit(c, req.UserID, model.TaskTypeResumeJDMatch) {
 		return
 	}
 
@@ -294,6 +309,43 @@ func parseLimitFromQuery(c *gin.Context) (int, bool) {
 	}
 
 	return limit, true
+}
+
+func (h *TaskHandler) enforceRateLimit(c *gin.Context, userID int64, taskType string) bool {
+	if h.rateLimiter == nil || h.rateLimitPerMinute <= 0 {
+		return true
+	}
+
+	key := "rate_limit:user:" + strconv.FormatInt(userID, 10) + ":task_type:" + taskType
+
+	allowed, current, resetIn, err := h.rateLimiter.Allow(
+		c.Request.Context(),
+		key,
+		h.rateLimitPerMinute,
+		time.Minute,
+	)
+
+	if err != nil {
+		log.Printf("rate_limit_check error user_id=%d task_type=%s err=%v", userID, taskType, err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": "rate limiter unavailable",
+		})
+		return false
+	}
+
+	log.Printf("rate_limit_check user_id=%d task_type=%s allowed=%t count=%d limit=%d reset_in=%s",
+		userID, taskType, allowed, current, h.rateLimitPerMinute, resetIn.String())
+
+	if !allowed {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"ok":    false,
+			"error": "rate limit exceeded",
+		})
+		return false
+	}
+
+	return true
 }
 
 func parseTaskID(c *gin.Context) (int64, bool) {

@@ -12,6 +12,8 @@ type Config struct {
 	Port        string
 	MySQLDSN    string
 	RedisAddr   string
+	RedisPassword string
+	RedisDB     int
 	RabbitMQURL string
 	JWTSecret   string
 
@@ -24,6 +26,8 @@ type Config struct {
 	LLMTemperature     float64
 	LLMMaxInputChars   int
 	LLMMaxOutputTokens int
+
+	RateLimitPerMinute int
 }
 
 var (
@@ -38,6 +42,8 @@ func Load() *Config {
 			Port:        getEnv("PORT", "8080"),
 			MySQLDSN:    mustGetEnv("MYSQL_DSN"),
 			RedisAddr:   mustGetEnv("REDIS_ADDR"),
+			RedisPassword: getEnv("REDIS_PASSWORD", ""),
+			RedisDB:     getEnvInt("REDIS_DB", 0),
 			RabbitMQURL: mustGetEnv("RABBITMQ_URL"),
 			JWTSecret:   mustGetEnv("JWT_SECRET"),
 
@@ -50,6 +56,8 @@ func Load() *Config {
 			LLMTemperature:     getEnvFloat("LLM_TEMPERATURE", 0.2),
 			LLMMaxInputChars:   getEnvInt("LLM_MAX_INPUT_CHARS", 8000),
 			LLMMaxOutputTokens: getEnvInt("LLM_MAX_OUTPUT_TOKENS", 800),
+
+			RateLimitPerMinute: getEnvInt("RATE_LIMIT_PER_MINUTE", 10),
 		}
 	})
 	return cfg

@@ -68,6 +68,9 @@ services:
 
       MYSQL_DSN: ${MYSQL_DSN:-app:app@tcp(mysql:3306)/appdb?parseTime=true&charset=utf8mb4&loc=Local}
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-10}
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
       JWT_SECRET: ${JWT_SECRET:-dev_secret_change_me}
 
@@ -104,10 +107,13 @@ services:
 
         MYSQL_DSN: ${MYSQL_DSN:-app:app@tcp(mysql:3306)/appdb?parseTime=true&charset=utf8mb4&loc=Local}
         REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+        REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+        REDIS_DB: ${REDIS_DB:-0}
+        RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-10}
         RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
         JWT_SECRET: ${JWT_SECRET:-dev_secret_change_me}
 
-        ANALYZER_MODE: ${ANALYZER_MODE:-llm}
+        ANALYZER_MODE: ${ANALYZER_MODE:-rules}
         LLM_PROVIDER: ${LLM_PROVIDER:-dashscope}
         LLM_BASE_URL: ${LLM_BASE_URL:-https://dashscope-us.aliyuncs.com/compatible-mode/v1}
         LLM_API_KEY: ${LLM_API_KEY:-}
