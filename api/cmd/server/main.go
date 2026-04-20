@@ -13,6 +13,7 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/mq"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/ratelimit"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/taskcache"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -26,19 +27,19 @@ func main() {
 		MaxOpenConns: 20,
 		MaxLifetime:  30 * time.Minute,
 	}, 10, 3*time.Second)
-
 	if err != nil {
 		log.Fatalf("init mysql failed after retries: %v", err)
 	}
 
 	redisClient, err := initRedisWithRetry(redisinfra.Config{
-		Addr: cfg.RedisAddr,
+		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword,
-		DB: cfg.RedisDB,
+		DB:       cfg.RedisDB,
 	}, 10, 3*time.Second)
 	if err != nil {
 		log.Fatalf("init redis failed after retries: %v", err)
 	}
+	defer redisClient.Close()
 
 	taskPublisher, err := mq.NewTaskPublisher(cfg.RabbitMQURL)
 	if err != nil {
@@ -47,11 +48,16 @@ func main() {
 	defer taskPublisher.Close()
 
 	rateLimiter := ratelimit.New(redisClient)
+	taskCache := taskcache.New(
+		redisClient,
+		time.Duration(cfg.TaskCacheTTLSeconds)*time.Second,
+		time.Duration(cfg.TaskListCacheTTLSeconds)*time.Second,
+	)
 
 	r := gin.Default()
 	r.Use(corsMiddleware())
 
-	registerRoutes(r, cfg, db, taskPublisher, rateLimiter)
+	registerRoutes(r, cfg, db, taskPublisher, rateLimiter, taskCache)
 
 	log.Printf("starting server on port %s in %s mode", cfg.Port, cfg.AppEnv)
 	if err := r.Run(":" + cfg.Port); err != nil {
@@ -92,11 +98,13 @@ func initMySQLWithRetry(cfg mysqlinfra.Config, maxAttempts int, delay time.Durat
 			time.Sleep(delay)
 		}
 	}
+
 	return nil, lastErr
 }
 
 func initRedisWithRetry(cfg redisinfra.Config, maxAttempts int, delay time.Duration) (*redis.Client, error) {
 	var lastErr error
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		client, err := redisinfra.New(cfg)
 		if err == nil {
@@ -115,9 +123,22 @@ func initRedisWithRetry(cfg redisinfra.Config, maxAttempts int, delay time.Durat
 	return nil, lastErr
 }
 
-func registerRoutes(r *gin.Engine, cfg *config.Config, db *gorm.DB, taskPublisher *mq.TaskPublisher, rateLimiter *ratelimit.RateLimiter) {
+func registerRoutes(
+	r *gin.Engine,
+	cfg *config.Config,
+	db *gorm.DB,
+	taskPublisher *mq.TaskPublisher,
+	rateLimiter *ratelimit.RateLimiter,
+	taskCache *taskcache.TaskCache,
+) {
 	taskRepo := repository.NewTaskRepository(db)
-	taskHandler := handler.NewTaskHandler(taskRepo, taskPublisher, rateLimiter, cfg.RateLimitPerMinute)
+	taskHandler := handler.NewTaskHandler(
+		taskRepo,
+		taskPublisher,
+		rateLimiter,
+		cfg.RateLimitPerMinute,
+		taskCache,
+	)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{

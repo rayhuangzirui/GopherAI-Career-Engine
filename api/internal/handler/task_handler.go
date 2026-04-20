@@ -13,6 +13,7 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/ratelimit"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/taskcache"
 	"gorm.io/gorm"
 )
 
@@ -25,14 +26,22 @@ type TaskHandler struct {
 	publisher          TaskPublisher
 	rateLimiter        *ratelimit.RateLimiter
 	rateLimitPerMinute int
+	taskCache          *taskcache.TaskCache
 }
 
-func NewTaskHandler(taskRepo *repository.TaskRepository, publisher TaskPublisher, rateLimiter *ratelimit.RateLimiter, rateLimitPerMinute int) *TaskHandler {
+func NewTaskHandler(
+	taskRepo *repository.TaskRepository,
+	publisher TaskPublisher,
+	rateLimiter *ratelimit.RateLimiter,
+	rateLimitPerMinute int,
+	taskCache *taskcache.TaskCache,
+) *TaskHandler {
 	return &TaskHandler{
 		taskRepo:           taskRepo,
 		publisher:          publisher,
 		rateLimiter:        rateLimiter,
 		rateLimitPerMinute: rateLimitPerMinute,
+		taskCache:          taskCache,
 	}
 }
 
@@ -45,6 +54,38 @@ type CreateResumeJDMatchTaskRequest struct {
 	UserID             int64  `json:"user_id" binding:"required"`
 	ResumeText         string `json:"resume_text" binding:"required"`
 	JobDescriptionText string `json:"job_description_text" binding:"required"`
+}
+
+type TaskResponse struct {
+	OK           bool        `json:"ok"`
+	ID           int64       `json:"id"`
+	UserID       int64       `json:"user_id"`
+	TaskType     string      `json:"task_type"`
+	Status       string      `json:"status"`
+	ErrorMessage *string     `json:"error_message"`
+	RetryCount   int         `json:"retry_count"`
+	StartedAt    interface{} `json:"started_at"`
+	CompletedAt  interface{} `json:"completed_at"`
+	CreatedAt    interface{} `json:"created_at"`
+	UpdatedAt    interface{} `json:"updated_at"`
+}
+
+type TaskListItemResponse struct {
+	ID           int64       `json:"id"`
+	UserID       int64       `json:"user_id"`
+	TaskType     string      `json:"task_type"`
+	Status       string      `json:"status"`
+	ErrorMessage *string     `json:"error_message"`
+	RetryCount   int         `json:"retry_count"`
+	StartedAt    interface{} `json:"started_at"`
+	CompletedAt  interface{} `json:"completed_at"`
+	CreatedAt    interface{} `json:"created_at"`
+	UpdatedAt    interface{} `json:"updated_at"`
+}
+
+type TaskListResponse struct {
+	OK    bool                   `json:"ok"`
+	Tasks []TaskListItemResponse `json:"tasks"`
 }
 
 func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
@@ -83,30 +124,49 @@ func (h *TaskHandler) CreateResumeJDMatchTask(c *gin.Context) {
 }
 
 func (h *TaskHandler) GetTask(c *gin.Context) {
-	task, ok := h.getTaskOrRespond(c)
+	taskID, ok := parseTaskID(c)
 	if !ok {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"ok":        true,
-		"id":        task.ID,
-		"user_id":   task.UserID,
-		"task_type": task.TaskType,
-		"status":    task.Status,
-		//"input_payload": task.InputPayload,
-		//"result_payload": task.ResultPayload,
-		"error_message": task.ErrorMessage,
-		"retry_count":   task.RetryCount,
-		"started_at":    task.StartedAt,
-		"completed_at":  task.CompletedAt,
-		"created_at":    task.CreatedAt,
-		"updated_at":    task.UpdatedAt,
-	})
+	cacheKey := taskcache.BuildTaskKey(taskID)
+	if h.taskCache != nil {
+		var cached TaskResponse
+		hit, err := h.taskCache.Get(c.Request.Context(), cacheKey, &cached)
+		if err != nil {
+			log.Printf("task_cache_error task_id=%d err=%v", taskID, err)
+		} else if hit {
+			log.Printf("task_cache_hit task_id=%d", taskID)
+			c.JSON(http.StatusOK, cached)
+			return
+		} else {
+			log.Printf("task_cache_miss task_id=%d", taskID)
+		}
+	}
+
+	task, ok := h.getTaskOrRespond(c, taskID)
+	if !ok {
+		return
+	}
+
+	response := buildTaskResponse(task)
+
+	if h.taskCache != nil {
+		if err := h.taskCache.SetTask(c.Request.Context(), taskID, response); err != nil {
+			log.Printf("task_cache_set_error task_id=%d err=%v", taskID, err)
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *TaskHandler) GetTaskResult(c *gin.Context) {
-	task, ok := h.getTaskOrRespond(c)
+	taskID, ok := parseTaskID(c)
+	if !ok {
+		return
+	}
+
+	task, ok := h.getTaskOrRespond(c, taskID)
 	if !ok {
 		return
 	}
@@ -130,6 +190,7 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 			"result": result,
 		})
 		return
+
 	case model.TaskStatusPermanentlyFailed:
 		c.JSON(http.StatusOK, gin.H{
 			"ok":            false,
@@ -137,6 +198,7 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 			"error_message": task.ErrorMessage,
 		})
 		return
+
 	default:
 		c.JSON(http.StatusOK, gin.H{
 			"ok":      true,
@@ -158,6 +220,21 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		return
 	}
 
+	cacheKey := taskcache.BuildTaskListKey(userID, limit)
+	if h.taskCache != nil {
+		var cached TaskListResponse
+		hit, err := h.taskCache.Get(c.Request.Context(), cacheKey, &cached)
+		if err != nil {
+			log.Printf("task_list_cache_error user_id=%d limit=%d err=%v", userID, limit, err)
+		} else if hit {
+			log.Printf("task_list_cache_hit user_id=%d limit=%d", userID, limit)
+			c.JSON(http.StatusOK, cached)
+			return
+		} else {
+			log.Printf("task_list_cache_miss user_id=%d limit=%d", userID, limit)
+		}
+	}
+
 	tasks, err := h.taskRepo.ListTasks(c.Request.Context(), userID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -167,26 +244,22 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 		return
 	}
 
-	responseTasks := make([]gin.H, 0, len(tasks))
-	for _, task := range tasks {
-		responseTasks = append(responseTasks, gin.H{
-			"id":            task.ID,
-			"user_id":       task.UserID,
-			"task_type":     task.TaskType,
-			"status":        task.Status,
-			"error_message": task.ErrorMessage,
-			"retry_count":   task.RetryCount,
-			"started_at":    task.StartedAt,
-			"completed_at":  task.CompletedAt,
-			"created_at":    task.CreatedAt,
-			"updated_at":    task.UpdatedAt,
-		})
+	response := TaskListResponse{
+		OK:    true,
+		Tasks: make([]TaskListItemResponse, 0, len(tasks)),
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"ok":    true,
-		"tasks": responseTasks,
-	})
+	for _, task := range tasks {
+		response.Tasks = append(response.Tasks, buildTaskListItemResponse(task))
+	}
+
+	if h.taskCache != nil {
+		if err := h.taskCache.SetTaskList(c.Request.Context(), userID, limit, response); err != nil {
+			log.Printf("task_list_cache_set_error user_id=%d limit=%d err=%v", userID, limit, err)
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func (h *TaskHandler) createTask(c *gin.Context, userID int64, taskType string, input any) {
@@ -230,6 +303,12 @@ func (h *TaskHandler) createTask(c *gin.Context, userID int64, taskType string, 
 		return
 	}
 
+	if h.taskCache != nil {
+		if err := h.taskCache.DeleteTaskListsForUser(c.Request.Context(), userID); err != nil {
+			log.Printf("task_list_cache_delete_error user_id=%d err=%v", userID, err)
+		}
+	}
+
 	c.JSON(http.StatusCreated, gin.H{
 		"ok":      true,
 		"task_id": task.ID,
@@ -237,12 +316,50 @@ func (h *TaskHandler) createTask(c *gin.Context, userID int64, taskType string, 
 	})
 }
 
-func (h *TaskHandler) getTaskOrRespond(c *gin.Context) (*model.Task, bool) {
-	taskID, ok := parseTaskID(c)
-	if !ok {
-		return nil, false
+func (h *TaskHandler) enforceRateLimit(c *gin.Context, userID int64, taskType string) bool {
+	if h.rateLimiter == nil || h.rateLimitPerMinute <= 0 {
+		return true
 	}
 
+	key := "rate_limit:user:" + strconv.FormatInt(userID, 10) + ":task_type:" + taskType
+
+	allowed, current, resetIn, err := h.rateLimiter.Allow(
+		c.Request.Context(),
+		key,
+		h.rateLimitPerMinute,
+		time.Minute,
+	)
+	if err != nil {
+		log.Printf("rate_limit_check error user_id=%d task_type=%s err=%v", userID, taskType, err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"ok":    false,
+			"error": "rate limiter unavailable",
+		})
+		return false
+	}
+
+	log.Printf(
+		"rate_limit_check user_id=%d task_type=%s allowed=%t count=%d limit=%d reset_in=%s",
+		userID,
+		taskType,
+		allowed,
+		current,
+		h.rateLimitPerMinute,
+		resetIn.String(),
+	)
+
+	if !allowed {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"ok":    false,
+			"error": "rate limit exceeded",
+		})
+		return false
+	}
+
+	return true
+}
+
+func (h *TaskHandler) getTaskOrRespond(c *gin.Context, taskID int64) (*model.Task, bool) {
 	task, err := h.taskRepo.GetTask(c.Request.Context(), taskID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -295,7 +412,6 @@ func parseUserIDFromQuery(c *gin.Context) (int64, bool) {
 	return userID, true
 }
 
-// limit the number of tasks returned in a single response
 func parseLimitFromQuery(c *gin.Context) (int, bool) {
 	rawLimit := c.DefaultQuery("limit", "20")
 
@@ -311,43 +427,6 @@ func parseLimitFromQuery(c *gin.Context) (int, bool) {
 	return limit, true
 }
 
-func (h *TaskHandler) enforceRateLimit(c *gin.Context, userID int64, taskType string) bool {
-	if h.rateLimiter == nil || h.rateLimitPerMinute <= 0 {
-		return true
-	}
-
-	key := "rate_limit:user:" + strconv.FormatInt(userID, 10) + ":task_type:" + taskType
-
-	allowed, current, resetIn, err := h.rateLimiter.Allow(
-		c.Request.Context(),
-		key,
-		h.rateLimitPerMinute,
-		time.Minute,
-	)
-
-	if err != nil {
-		log.Printf("rate_limit_check error user_id=%d task_type=%s err=%v", userID, taskType, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"ok":    false,
-			"error": "rate limiter unavailable",
-		})
-		return false
-	}
-
-	log.Printf("rate_limit_check user_id=%d task_type=%s allowed=%t count=%d limit=%d reset_in=%s",
-		userID, taskType, allowed, current, h.rateLimitPerMinute, resetIn.String())
-
-	if !allowed {
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"ok":    false,
-			"error": "rate limit exceeded",
-		})
-		return false
-	}
-
-	return true
-}
-
 func parseTaskID(c *gin.Context) (int64, bool) {
 	rawID := c.Param("id")
 	taskID, err := strconv.ParseInt(rawID, 10, 64)
@@ -360,4 +439,35 @@ func parseTaskID(c *gin.Context) (int64, bool) {
 	}
 
 	return taskID, true
+}
+
+func buildTaskResponse(task *model.Task) TaskResponse {
+	return TaskResponse{
+		OK:           true,
+		ID:           task.ID,
+		UserID:       task.UserID,
+		TaskType:     task.TaskType,
+		Status:       task.Status,
+		ErrorMessage: task.ErrorMessage,
+		RetryCount:   task.RetryCount,
+		StartedAt:    task.StartedAt,
+		CompletedAt:  task.CompletedAt,
+		CreatedAt:    task.CreatedAt,
+		UpdatedAt:    task.UpdatedAt,
+	}
+}
+
+func buildTaskListItemResponse(task model.Task) TaskListItemResponse {
+	return TaskListItemResponse{
+		ID:           task.ID,
+		UserID:       task.UserID,
+		TaskType:     task.TaskType,
+		Status:       task.Status,
+		ErrorMessage: task.ErrorMessage,
+		RetryCount:   task.RetryCount,
+		StartedAt:    task.StartedAt,
+		CompletedAt:  task.CompletedAt,
+		CreatedAt:    task.CreatedAt,
+		UpdatedAt:    task.UpdatedAt,
+	}
 }
