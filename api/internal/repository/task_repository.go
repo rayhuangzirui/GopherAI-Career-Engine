@@ -197,3 +197,27 @@ func (r *TaskRepository) MarkFailed(ctx context.Context, id int64, errorMessage 
 
 	return nil
 }
+
+func (r *TaskRepository) UpdateArtifactLocation(
+	ctx context.Context,
+	taskID int64,
+	storageName string,
+	artifactKey string,
+) error {
+	tx := r.db.WithContext(ctx).
+		Model(&model.Task{}).
+		Where("id = ? AND status = ?", taskID, model.TaskStatusCompleted).
+		Updates(map[string]interface{}{
+			"artifact_key":         artifactKey,
+			"artifact_storage": storageName,
+		})
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	if tx.RowsAffected == 0 {
+		return ErrInvalidStateTransition
+	}
+
+	return nil
+}

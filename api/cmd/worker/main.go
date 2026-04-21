@@ -11,6 +11,9 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/mq"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/analyzer"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/storage"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/storage/localstorage"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/storage/s3storage"
 	"gorm.io/gorm"
 )
 
@@ -32,6 +35,11 @@ func main() {
 	//mockAnalyzer := analyzer.NewMockAnalyzer()
 	//ruleAnalyzer := analyzer.NewRulesAnalyzer()
 	taskAnalyzer, err := buildAnalyzer(cfg)
+	artifactStorage, err := buildStorage(cfg)
+	if err != nil {
+		log.Fatalf("build storage failed: %v", err)
+	}
+
 	if err != nil {
 		log.Fatalf("build analyzer failed: %v", err)
 	}
@@ -42,6 +50,7 @@ func main() {
 		processedKeyRepo,
 		//mockAnalyzer,
 		taskAnalyzer,
+		artifactStorage,
 		mq.RetryConfig{
 			MaxRetries: 3,
 		},
@@ -79,13 +88,14 @@ func initTaskConsumerWithRetry(
 	taskRepo *repository.TaskRepository,
 	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
+	artifactStorage storage.Storage,
 	retryConfig mq.RetryConfig,
 	maxAttempts int,
 	delay time.Duration,
 ) (*mq.TaskConsumer, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		consumer, err := mq.NewTaskConsumer(rabbitmqURL, taskRepo, processedKeyRepo, analyzer, retryConfig)
+		consumer, err := mq.NewTaskConsumer(rabbitmqURL, taskRepo, processedKeyRepo, analyzer, artifactStorage, retryConfig)
 		if err == nil {
 			log.Printf("rabbitmq task consumer connected on attempt %d/%d", attempt, maxAttempts)
 			return consumer, nil
@@ -121,4 +131,22 @@ func initMySQLWithRetry(cfg mysqlinfra.Config, maxAttempts int, delay time.Durat
 	}
 
 	return nil, lastErr
+}
+
+func buildStorage(cfg *config.Config) (storage.Storage, error) {
+	switch cfg.ArtifactStorageDriver {
+	case "local":
+		return localstorage.NewLocalStorage(cfg.ArtifactLocalBaseDir)
+	case "s3":
+		return s3storage.New(s3storage.Config{
+			Region: cfg.AWSRegion,
+			Bucket: cfg.S3Bucket,
+			Endpoint: cfg.S3Endpoint,
+			AccessKeyID: cfg.S3AccessKeyID,
+			SecretAccessKey: cfg.S3SecretAccessKey,
+			ForcePathStyle: cfg.S3ForcePathStyle,
+		})
+	default:
+		return nil, fmt.Errorf("unknown artifact storage driver: %s", cfg.ArtifactStorageDriver)
+	}
 }

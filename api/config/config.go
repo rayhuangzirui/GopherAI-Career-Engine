@@ -31,6 +31,16 @@ type Config struct {
 	TaskCacheTTLSeconds       int
 	TaskListCacheTTLSeconds   int
 	TaskResultCacheTTLSeconds int
+
+	ArtifactStorageDriver string
+	ArtifactLocalBaseDir  string
+
+	AWSRegion   	string
+	S3Bucket        string
+	S3Endpoint 		string
+	S3AccessKeyID 	string
+	S3SecretAccessKey string
+	S3ForcePathStyle bool
 }
 
 var (
@@ -64,6 +74,16 @@ func Load() *Config {
 			TaskCacheTTLSeconds:       getEnvInt("TASK_CACHE_TTL_SECONDS", 60),
 			TaskListCacheTTLSeconds:   getEnvInt("TASK_LIST_CACHE_TTL_SECONDS", 10),
 			TaskResultCacheTTLSeconds: getEnvInt("TASK_RESULT_CACHE_TTL_SECONDS", 300),
+
+			ArtifactStorageDriver: getEnv("ARTIFACT_STORAGE_DRIVER", "local"),
+			ArtifactLocalBaseDir: getEnv("ARTIFACT_LOCAL_BASE_DIR", "./data"),
+
+			AWSRegion: getEnv("AWS_REGION", ""),
+			S3Bucket: getEnv("S3_BUCKET", ""),
+			S3Endpoint: getEnv("S3_ENDPOINT", ""),
+			S3AccessKeyID: getEnv("S3_ACCESS_KEY_ID", ""),
+			S3SecretAccessKey: getEnv("S3_SECRET_ACCESS_KEY", ""),
+			S3ForcePathStyle: getEnvBool("S3_FORCE_PATH_STYLE", false),
 		}
 	})
 	return cfg
@@ -105,6 +125,18 @@ func getEnvFloat(key string, def float64) float64 {
 	parsed, err := strconv.ParseFloat(value, 64)
 	if err != nil {
 		panic(fmt.Sprintf("invalid float environment variable %s=%q", key, value))
+	}
+	return parsed
+}
+
+func getEnvBool(key string, def bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return def
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		panic(fmt.Sprintf("invalid bool environment variable %s=%q", key, value))
 	}
 	return parsed
 }

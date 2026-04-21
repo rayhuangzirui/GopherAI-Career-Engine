@@ -12,6 +12,7 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/model"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/analyzer"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/storage"
 )
 
 type TaskExecError struct {
@@ -46,12 +47,13 @@ func (c RetryConfig) DelayForAttemp(attempt int) time.Duration {
 
 type TaskConsumer struct {
 	conn             *amqp.Connection
-	channel    		 *amqp.Channel
-	mainQueue  		 amqp.Queue
-	retryQueue 		 amqp.Queue
+	channel          *amqp.Channel
+	mainQueue        amqp.Queue
+	retryQueue       amqp.Queue
 	taskRepo         *repository.TaskRepository
 	processedKeyRepo *repository.ProcessedKeyRepository
 	analyzer         analyzer.Analyzer
+	artifactStorage  storage.Storage
 	publisher        *TaskPublisher
 	retryConfig      RetryConfig
 }
@@ -61,6 +63,7 @@ func NewTaskConsumer(
 	taskRepo *repository.TaskRepository,
 	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
+	artifactStorage storage.Storage,
 	retryConfig RetryConfig,
 ) (*TaskConsumer, error) {
 	conn, ch, mainQ, retryQ, err := setupTaskQueues(rabbitMQURL)
@@ -78,6 +81,7 @@ func NewTaskConsumer(
 		taskRepo:         taskRepo,
 		processedKeyRepo: processedKeyRepo,
 		analyzer:         analyzer,
+		artifactStorage:  artifactStorage,
 		publisher:        publisher,
 		retryConfig:      retryConfig,
 	}, nil
@@ -158,8 +162,50 @@ func (c *TaskConsumer) handleMessage(ctx context.Context, msg amqp.Delivery) err
 
 	resultBytes, execErr := c.executeTask(ctx, task)
 	if execErr == nil {
-		if err := c.taskRepo.MarkCompleted(ctx, task.ID, string(resultBytes)); err != nil {
+		resultPayload := string(resultBytes)
+
+		if err := c.taskRepo.MarkCompleted(ctx, task.ID, resultPayload); err != nil {
 			return fmt.Errorf("mark completed task %d: %w", task.ID, err)
+		}
+
+		if c.artifactStorage != nil {
+			artifactKey := storage.BuildTaskResultArtifactKey(task.ID)
+
+			if err := c.artifactStorage.Put(
+				ctx,
+				artifactKey,
+				"application/json",
+				resultBytes,
+			); err != nil {
+				log.Printf(
+					"artifact_put_failed task_id=%d storage=%s err=%v",
+					task.ID,
+					c.artifactStorage.Name(),
+					err,
+				)
+			} else {
+				if err := c.taskRepo.UpdateArtifactLocation(
+					ctx,
+					task.ID,
+					c.artifactStorage.Name(),
+					artifactKey,
+				); err != nil {
+					log.Printf(
+						"artifact_metadata_update_failed task_id=%d storage=%s key=%s err=%v",
+						task.ID,
+						c.artifactStorage.Name(),
+						artifactKey,
+						err,
+					)
+				} else {
+					log.Printf(
+						"artifact_put_success task_id=%d storage=%s key=%s",
+						task.ID,
+						c.artifactStorage.Name(),
+						artifactKey,
+					)
+				}
+			}
 		}
 
 		if err := c.processedKeyRepo.Create(ctx, taskMessage.MessageKey); err != nil {

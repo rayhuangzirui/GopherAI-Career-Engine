@@ -28,6 +28,8 @@ type Task struct {
 	Status        string     `gorm:"type:varchar(20);not null;index" json:"status"`
 	InputPayload  string     `gorm:"type:json;not null" json:"input_payload"`
 	ResultPayload *string    `gorm:"type:json" json:"result_payload"`
+	ArtifactKey   *string    `gorm:"type:varchar(255)" json:"artifact_key"`
+	ArtifactStorage *string    `gorm:"type:varchar(20)" json:"artifact_storage"`
 	ErrorMessage  *string    `gorm:"type:text" json:"error_message"`
 	RetryCount    int        `gorm:"default:0;not null" json:"retry_count"`
 	StartedAt     *time.Time `gorm:"type:datetime" json:"started_at"`   // nullable, only set when task is started
