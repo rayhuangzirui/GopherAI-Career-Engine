@@ -27,9 +27,10 @@ type Config struct {
 	LLMMaxInputChars   int
 	LLMMaxOutputTokens int
 
-	RateLimitPerMinute      int
-	TaskCacheTTLSeconds     int
-	TaskListCacheTTLSeconds int
+	RateLimitPerMinute        int
+	TaskCacheTTLSeconds       int
+	TaskListCacheTTLSeconds   int
+	TaskResultCacheTTLSeconds int
 }
 
 var (
@@ -59,9 +60,10 @@ func Load() *Config {
 			LLMMaxInputChars:   getEnvInt("LLM_MAX_INPUT_CHARS", 8000),
 			LLMMaxOutputTokens: getEnvInt("LLM_MAX_OUTPUT_TOKENS", 800),
 
-			RateLimitPerMinute:      getEnvInt("RATE_LIMIT_PER_MINUTE", 10),
-			TaskCacheTTLSeconds:     getEnvInt("TASK_CACHE_TTL_SECONDS", 2),
-			TaskListCacheTTLSeconds: getEnvInt("TASK_LIST_CACHE_TTL_SECONDS", 10),
+			RateLimitPerMinute:        getEnvInt("RATE_LIMIT_PER_MINUTE", 10),
+			TaskCacheTTLSeconds:       getEnvInt("TASK_CACHE_TTL_SECONDS", 60),
+			TaskListCacheTTLSeconds:   getEnvInt("TASK_LIST_CACHE_TTL_SECONDS", 10),
+			TaskResultCacheTTLSeconds: getEnvInt("TASK_RESULT_CACHE_TTL_SECONDS", 300),
 		}
 	})
 	return cfg

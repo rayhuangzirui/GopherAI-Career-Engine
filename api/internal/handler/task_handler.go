@@ -88,6 +88,18 @@ type TaskListResponse struct {
 	Tasks []TaskListItemResponse `json:"tasks"`
 }
 
+type TaskResultCompletedResponse struct {
+	OK     bool        `json:"ok"`
+	Status string      `json:"status"`
+	Result interface{} `json:"result"`
+}
+
+type TaskResultFailedResponse struct {
+	OK           bool    `json:"ok"`
+	Status       string  `json:"status"`
+	ErrorMessage *string `json:"error_message"`
+}
+
 func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 	var req CreateResumeAnalysisTaskRequest
 	if !bindJSON(c, &req) {
@@ -151,9 +163,12 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 
 	response := buildTaskResponse(task)
 
+	// Only cache final states so polling won't be dulled by cached queued/processing/retrying states.
 	if h.taskCache != nil {
-		if err := h.taskCache.SetTask(c.Request.Context(), taskID, response); err != nil {
-			log.Printf("task_cache_set_error task_id=%d err=%v", taskID, err)
+		if task.Status == model.TaskStatusCompleted || task.Status == model.TaskStatusPermanentlyFailed {
+			if err := h.taskCache.SetTask(c.Request.Context(), taskID, response); err != nil {
+				log.Printf("task_cache_set_error task_id=%d err=%v", taskID, err)
+			}
 		}
 	}
 
@@ -164,6 +179,20 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 	taskID, ok := parseTaskID(c)
 	if !ok {
 		return
+	}
+
+	if h.taskCache != nil {
+		var cached map[string]interface{}
+		hit, err := h.taskCache.Get(c.Request.Context(), taskcache.BuildTaskResultKey(taskID), &cached)
+		if err != nil {
+			log.Printf("task_result_cache_error task_id=%d err=%v", taskID, err)
+		} else if hit {
+			log.Printf("task_result_cache_hit task_id=%d", taskID)
+			c.JSON(http.StatusOK, cached)
+			return
+		} else {
+			log.Printf("task_result_cache_miss task_id=%d", taskID)
+		}
 	}
 
 	task, ok := h.getTaskOrRespond(c, taskID)
@@ -184,19 +213,35 @@ func (h *TaskHandler) GetTaskResult(c *gin.Context) {
 			}
 		}
 
-		c.JSON(http.StatusOK, gin.H{
-			"ok":     true,
-			"status": task.Status,
-			"result": result,
-		})
+		response := TaskResultCompletedResponse{
+			OK:     true,
+			Status: task.Status,
+			Result: result,
+		}
+
+		if h.taskCache != nil {
+			if err := h.taskCache.SetTaskResult(c.Request.Context(), taskID, response); err != nil {
+				log.Printf("task_result_cache_set_error task_id=%d err=%v", taskID, err)
+			}
+		}
+
+		c.JSON(http.StatusOK, response)
 		return
 
 	case model.TaskStatusPermanentlyFailed:
-		c.JSON(http.StatusOK, gin.H{
-			"ok":            false,
-			"status":        task.Status,
-			"error_message": task.ErrorMessage,
-		})
+		response := TaskResultFailedResponse{
+			OK:           false,
+			Status:       task.Status,
+			ErrorMessage: task.ErrorMessage,
+		}
+
+		if h.taskCache != nil {
+			if err := h.taskCache.SetTaskResult(c.Request.Context(), taskID, response); err != nil {
+				log.Printf("task_result_cache_set_error task_id=%d err=%v", taskID, err)
+			}
+		}
+
+		c.JSON(http.StatusOK, response)
 		return
 
 	default:

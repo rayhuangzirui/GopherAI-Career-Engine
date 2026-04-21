@@ -52,6 +52,7 @@ func main() {
 		redisClient,
 		time.Duration(cfg.TaskCacheTTLSeconds)*time.Second,
 		time.Duration(cfg.TaskListCacheTTLSeconds)*time.Second,
+		time.Duration(cfg.TaskResultCacheTTLSeconds)*time.Second,
 	)
 
 	r := gin.Default()

@@ -13,13 +13,15 @@ type TaskCache struct {
 	client      *redis.Client
 	taskTTL     time.Duration
 	taskListTTL time.Duration
+	taskResultTTL time.Duration
 }
 
-func New(client *redis.Client, taskTTL, taskListTTL time.Duration) *TaskCache {
+func New(client *redis.Client, taskTTL, taskListTTL time.Duration, taskResultTTL time.Duration) *TaskCache {
 	return &TaskCache{
 		client:      client,
 		taskTTL:     taskTTL,
 		taskListTTL: taskListTTL,
+		taskResultTTL: taskResultTTL,
 	}
 }
 
@@ -29,6 +31,10 @@ func BuildTaskKey(taskID int64) string {
 
 func BuildTaskListKey(userID int64, limit int) string {
 	return fmt.Sprintf("task_list:user:%d:limit:%d", userID, limit)
+}
+
+func BuildTaskResultKey(taskID int64) string {
+	return fmt.Sprintf("task_result:%d", taskID)
 }
 
 func (c *TaskCache) Get(ctx context.Context, key string, dest any) (bool, error) {
@@ -55,12 +61,20 @@ func (c *TaskCache) SetTaskList(ctx context.Context, userID int64, limit int, va
 	return c.set(ctx, BuildTaskListKey(userID, limit), value, c.taskListTTL)
 }
 
+func (c *TaskCache) SetTaskResult(ctx context.Context, taskID int64, value any) error {
+	return c.set(ctx, BuildTaskResultKey(taskID), value, c.taskResultTTL)
+}
+
 func (c *TaskCache) DeleteTask(ctx context.Context, taskID int64) error {
 	return c.client.Del(ctx, BuildTaskKey(taskID)).Err()
 }
 
 func (c *TaskCache) DeleteTaskList(ctx context.Context, userID int64, limit int) error {
 	return c.client.Del(ctx, BuildTaskListKey(userID, limit)).Err()
+}
+
+func (c *TaskCache) DeleteTaskResult(ctx context.Context, taskID int64) error {
+	return c.client.Del(ctx, BuildTaskResultKey(taskID)).Err()
 }
 
 func (c *TaskCache) DeleteTaskListsForUser(ctx context.Context, userID int64) error {
