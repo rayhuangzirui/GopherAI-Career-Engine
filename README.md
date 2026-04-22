@@ -1,164 +1,130 @@
 # GopherAI Career Engine
 
-GopherAI Career Engine is an asynchronous resume/JD matching platform.
+GopherAI Career Engine is a backend project I built to practice async processing in a more realistic workflow than a normal CRUD app.
 
-It takes a resume and a job description, creates an analysis task, processes it in the background, and returns a user-friendly match report. The system includes task state tracking, delayed retries, attempt-level idempotency, and an LLM-backed analysis path with a deterministic rules fallback.
+Instead of doing resume analysis in one request, the API creates a task, pushes it to RabbitMQ, and lets a worker process it in the background. I used this project to practice queue-based design, retries, idempotency, caching, file upload, and object storage in one system. 
+I also wanted to put the LLM part inside a more controlled backend pipeline.
 
-## Tech Stack
+## Stack
 
-- **Backend:** Go, Gin
-- **Queue / Infra:** RabbitMQ, Docker Compose
-- **Database:** MySQL
-- **Frontend:** Next.js, React, TypeScript
-- **Analysis:** LLM-backed matcher + rules-based fallback
+- Go, Gin
+- MySQL
+- RabbitMQ
+- Redis
+- Docker Compose
+- Next.js / React / TypeScript
+- DashScope OpenAI-compatible API
+- Amazon S3
 
-## What it does
+## What it can do
 
-- Submit resume/JD matching tasks through the frontend or API
-- Process tasks asynchronously with background workers
-- Track task states from `queued` to `completed` / `permanently_failed`
-- Retry failed tasks with delayed backoff
-- Prevent duplicate finalization with attempt-level idempotency keys
-- Return a readable report instead of raw JSON
-- Show analysis history in the frontend
+- create resume analysis and resume/JD match tasks
+- process tasks asynchronously with API/worker separation
+- track task states from `pending` to `completed` or `permanently_failed`
+- retry failed tasks with backoff
+- avoid duplicate finalization with attempt-level idempotency keys
+- support both direct text input and uploaded `.txt` files
+- store uploaded files and result artifacts in local storage or S3
+- cache task reads and rate-limit task creation with Redis
+- show results and task history in a simple frontend demo
 
-## Architecture
+## High-level flow
 
-```text
-Next.js Frontend
-      |
-      v
- Go API (Gin)
-      |
-      v
-  RabbitMQ Queue
-      |
-      v
- Go Workers
-      |
-      +--> LLM analyzer
-      |      |
-      |      +--> rules fallback
-      |
-      v
-    MySQL
-```
+1. The user submits text or uploads files
+2. The API creates a task in MySQL
+3. The task is published to RabbitMQ
+4. A worker picks up the task
+5. The worker reads the input, runs analysis, and writes the result
+6. The result can be queried later by task ID
+   
+## RabbitMQ usage
 
-## Task flow
+RabbitMQ is used to decouple task creation from task execution.
 
-1. A user submits a resume and a job description
-2. The API creates a task record in MySQL and publishes a queue message
-3. A worker picks up the task and updates its state
-4. The worker runs the analyzer
-5. On temporary failure, the task is retried with delayed backoff
-6. On success, the result is stored and shown in the frontend
-7. On repeated failure, the task becomes `permanently_failed`
+When the API receives a resume analysis request, it first creates a task record in MySQL and then publishes a message to RabbitMQ. A worker consumes the message later and processes the task in the background.
 
-## Key features
+I used RabbitMQ here mainly to support a more realistic async workflow:
 
-- Async task processing with API / worker separation
-- Explicit task states:
-  - `pending`
-  - `queued`
-  - `processing`
-  - `retrying`
-  - `completed`
-  - `permanently_failed`
-- Delayed retry with capped backoff
-- Attempt-level idempotency via `processed_keys`
-- LLM output guardrails:
-  - input sanitization
-  - bounded prompts
-  - validated JSON output
-  - rules fallback
-- Frontend polling for real-time status updates
-- Demo workspace with historical analyses
+- the API does not have to wait for analysis to finish before responding
+- workers can process tasks separately from the request path
+- failed tasks can be retried with delayed backoff
+- multiple workers can consume from the same queue
+- duplicate message handling is controlled with attempt-level idempotency keys
 
-## Benchmark
+## LLM integration
 
-Local rules-mode benchmark with **2 workers**:
+The project can run in either `rules` mode or `llm` mode.
 
-- **100 tasks submitted**
-- **80 completed**
-- **20 permanently_failed** (expected injected failures)
-- **0 unfinished**
-- **Task creation latency:** 60.9 ms avg, 60.4 ms p50, 81.9 ms p95
-- **Successful completion latency:** 3553.9 ms avg, 3578.8 ms p50, 5808.1 ms p95
-- **Failure-path latency:** 48.2 s avg due to delayed retries
-- **Task behavior validation passed**
-- **processed_keys / idempotency validation passed**
-- **No duplicate finalization observed**
+For LLM mode, it uses DashScope through an OpenAI-compatible API style. In other words, the provider is DashScope, but the request/response shape follows an OpenAI-style chat API pattern.
 
-## Frontend
+I also tried to keep the LLM part bounded instead of letting it control the whole system:
 
-The frontend is a small Next.js workspace for:
+- resume/JD text is treated as untrusted input data, not as instructions
+- prompts tell the model to ignore instructions embedded inside user content
+- model output is expected to follow a fixed JSON shape
+- output is validated before the result is accepted
+- the application code still decides task behavior, retries, and final status
+- a rules-based fallback is available when LLM output is not usable
 
-- submitting a resume/JD analysis
-- showing task status changes
-- rendering a readable match report
-- viewing recent analysis history
+So the LLM is one part of the pipeline, not the source of truth for system behavior.
 
-Current UX focus is the end-to-end workflow, not authentication.
+## MySQL usage
 
-## Demo notes
+MySQL is the main source of truth in this project.
 
-This project currently uses a **single pre-seeded demo user** for the frontend workflow.
+It stores the persistent state for the async workflow, while RabbitMQ is used for message delivery and Redis is used for caching and rate limiting.
 
-Authentication is intentionally deferred so the project can stay focused on async processing, reliability, and LLM-backed analysis.
+In this project, MySQL is mainly used for:
 
-## Local setup
+- task records and task state transitions
+- retry counts and error messages
+- final analysis results
+- upload metadata for user files
+- processed message keys for idempotency checks
 
-### 1. Start backend services
+I wanted task status and final results to be durable, so the system does not depend on in-memory state or queue state to know what has happened.
 
-From the project root:
+So MySQL is mainly there to keep the async pipeline reliable and queryable, especially for task history, retries, and final result lookup.
 
-```bash
-docker compose up --build -d
-```
+## Storage
 
-### 2. Run the frontend
+Storage is used in this project for files that should live outside the main database.
 
-```bash
-cd web
-npm install
-npm run dev
-```
+I added a small storage abstraction so the same workflow can work with either `local` filesystem storage or `AWS S3`.
 
-Frontend:
-- `http://localhost:3000`
+In this project, storage is mainly used for:
 
-Backend API:
-- `http://localhost:8080`
+- local filesystem storage
+- AWS S3
 
-## Environment variables
+Storage is used for:
 
-Typical backend/frontend configuration includes:
+- uploaded resume / JD files
+- completed task result artifacts
+ 
+I wanted file inputs and generated artifacts to be stored separately from task state, so MySQL can stay focused on structured application data while storage handles file persistence.
 
-- `MYSQL_DSN`
-- `RABBITMQ_URL`
-- `ANALYZER_MODE` (`rules` or `llm`)
-- `LLM_PROVIDER`
-- `LLM_BASE_URL`
-- `LLM_MODEL`
-- `DASHSCOPE_API_KEY`
+So the storage layer is mainly there to support file-based workflows and make the system easier to extend to cloud object storage.
 
-For LLM mode, the current setup uses DashScope's OpenAI-compatible API.
+## Redis usage
 
-## Modes
+Redis is used for a few lightweight backend features around the main task pipeline.
 
-### Rules mode
-Used for deterministic local benchmarking and failure-path validation.
+I did not use Redis as the source of truth for task state. Instead, it is used to support request-side protection and reduce repeated reads.
 
-### LLM mode
-Used for real resume/JD matching analysis.
-The current implementation supports:
-- input sanitization
-- JSON schema validation
-- bounded outputs
-- rules fallback when LLM output is unusable
+In this project, Redis is mainly used for:
 
-## Example API endpoints
+- per-user rate limiting on analysis endpoints
+- short-lived caching for task detail reads
+- short-lived caching for task history reads
+- short-lived caching for final result reads
 
+I wanted these parts to stay fast without changing the main task model, so MySQL still keeps the durable state while Redis handles temporary data.
+
+So Redis is mainly there to protect the async endpoints and reduce repeated database reads during frontend polling.
+## API examples
+
+- `POST /uploads`
 - `POST /tasks/resume-analysis`
 - `POST /tasks/resume-jd-match`
 - `GET /tasks`
@@ -166,29 +132,69 @@ The current implementation supports:
 - `GET /tasks/:id/result`
 - `GET /health`
 
-## Current scope
+## Local run
 
-Included:
-- async backend pipeline
-- retry and idempotency handling
-- LLM-backed analysis flow
-- frontend demo workspace
-- analysis history
+From the project root:
 
-Not included yet:
-- user authentication
-- image/OCR upload
-- production deployment
-- DLQ / outbox patterns
+```bash
+docker compose up -d --build
+```
 
-## Why I built it
+Frontend:
 
-I wanted a project that was more than a single API endpoint or a toy LLM demo.
+```bash
+cd web
+npm install
+npm run dev
+```
 
-The goal was to build a backend-heavy system that could:
-- handle long-running work asynchronously
-- recover from failure
-- keep state consistent
-- expose a clean user workflow on top of it
+## Demo flow
 
-That made it a better fit for backend and full-stack SWE roles than a simple one-shot analysis app.
+Upload files:
+
+```bash
+curl -s -X POST "http://localhost:8080/uploads" \
+  -F "user_id=1" \
+  -F "kind=resume" \
+  -F "file=@/path/to/resume.txt"
+
+curl -s -X POST "http://localhost:8080/uploads" \
+  -F "user_id=1" \
+  -F "kind=jd" \
+  -F "file=@/path/to/jd.txt"
+```
+
+Create a task with uploaded file keys:
+
+```bash
+curl -s -X POST "http://localhost:8080/tasks/resume-jd-match" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": 1,
+    "resume_file_key": "uploads/resumes/user-1/...",
+    "job_description_file_key": "uploads/jds/user-1/..."
+  }'
+```
+
+## Benchmark
+
+In local rules mode with 2 workers:
+
+- 100 tasks submitted
+- 80 completed
+- 20 permanently failed (expected injected failures)
+- 0 unfinished
+- no duplicate finalization observed
+
+## Current limitations
+
+- no auth yet
+- upload parsing is still minimal (`.txt` only right now)
+- no OCR or image parsing
+- not deployed to production
+
+## Why I made it
+
+I wanted one project where I could practice backend topics that show up a lot in real systems, especially async workflows, retries, caching, and storage.
+
+I also wanted the LLM part to sit inside a more controlled backend pipeline instead of building a project that was just one API call plus a prompt.
