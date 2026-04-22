@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -80,6 +81,23 @@ func (s *S3Storage) Put(ctx context.Context, key string, contentType string, dat
 		return fmt.Errorf("put object to s3: %w", err)
 	}
 	return nil
+}
+
+func (s *S3Storage) Get(ctx context.Context, key string) ([]byte, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key: 	aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get object from s3: %w", err)
+	}
+	defer out.Body.Close()
+
+	data, err := io.ReadAll(out.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read s3 object body: %w", err)
+	}
+	return data, nil
 }
 
 var _ storage.Storage = (*S3Storage)(nil)

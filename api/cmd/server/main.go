@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -14,6 +15,9 @@ import (
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/repository"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/ratelimit"
 	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/service/taskcache"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/storage"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/storage/localstorage"
+	"github.com/rayhuangzirui/GopherAI-Career-Engine/internal/storage/s3storage"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -47,6 +51,11 @@ func main() {
 	}
 	defer taskPublisher.Close()
 
+	fileStore, err := buildStorage(cfg)
+	if err != nil {
+		log.Fatalf("build storage failed: %v", err)
+	}
+
 	rateLimiter := ratelimit.New(redisClient)
 	taskCache := taskcache.New(
 		redisClient,
@@ -58,7 +67,7 @@ func main() {
 	r := gin.Default()
 	r.Use(corsMiddleware())
 
-	registerRoutes(r, cfg, db, taskPublisher, rateLimiter, taskCache)
+	registerRoutes(r, cfg, db, taskPublisher, rateLimiter, taskCache, fileStore)
 
 	log.Printf("starting server on port %s in %s mode", cfg.Port, cfg.AppEnv)
 	if err := r.Run(":" + cfg.Port); err != nil {
@@ -124,6 +133,26 @@ func initRedisWithRetry(cfg redisinfra.Config, maxAttempts int, delay time.Durat
 	return nil, lastErr
 }
 
+func buildStorage(cfg *config.Config) (storage.Storage, error) {
+	switch cfg.ArtifactStorageDriver {
+	case "local":
+		log.Printf("storage driver: local, base dir: %s", cfg.ArtifactLocalBaseDir)
+		return localstorage.NewLocalStorage(cfg.ArtifactLocalBaseDir)
+	case "s3":
+		log.Printf("storage driver: s3, bucket: %s, region: %s, endpoint: %s", cfg.S3Bucket, cfg.AWSRegion, cfg.S3Endpoint)
+		return s3storage.New(s3storage.Config{
+			Region: cfg.AWSRegion,
+			Bucket: cfg.S3Bucket,
+			Endpoint: cfg.S3Endpoint,
+			AccessKeyID: cfg.S3AccessKeyID,
+			SecretAccessKey: cfg.S3SecretAccessKey,
+			ForcePathStyle: cfg.S3ForcePathStyle,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported artifact storage driver: %s", cfg.ArtifactStorageDriver)
+	}
+}
+
 func registerRoutes(
 	r *gin.Engine,
 	cfg *config.Config,
@@ -131,8 +160,11 @@ func registerRoutes(
 	taskPublisher *mq.TaskPublisher,
 	rateLimiter *ratelimit.RateLimiter,
 	taskCache *taskcache.TaskCache,
+	fileStore storage.Storage,
 ) {
 	taskRepo := repository.NewTaskRepository(db)
+	uploadRepo := repository.NewUploadRepository(db)
+
 	taskHandler := handler.NewTaskHandler(
 		taskRepo,
 		taskPublisher,
@@ -140,6 +172,7 @@ func registerRoutes(
 		cfg.RateLimitPerMinute,
 		taskCache,
 	)
+	uploadHandler := handler.NewUploadHandler(uploadRepo, fileStore)
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -148,6 +181,7 @@ func registerRoutes(
 			"mysql":    db != nil,
 			"redis":    cfg.RedisAddr != "",
 			"rabbitmq": cfg.RabbitMQURL != "",
+			"storage":  fileStore.Name(),
 		})
 	})
 
@@ -167,6 +201,8 @@ func registerRoutes(
 			"usersCount": usersCount,
 		})
 	})
+
+	r.POST("/uploads", uploadHandler.UploadFile)
 
 	r.POST("/tasks/resume-analysis", taskHandler.CreateResumeAnalysisTask)
 	r.POST("/tasks/resume-jd-match", taskHandler.CreateResumeJDMatchTask)

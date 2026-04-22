@@ -31,11 +31,13 @@ func main() {
 	}
 
 	taskRepo := repository.NewTaskRepository(db)
+	uploadRepo := repository.NewUploadRepository(db)
+
 	processedKeyRepo := repository.NewProcessedKeyRepository(db)
 	//mockAnalyzer := analyzer.NewMockAnalyzer()
 	//ruleAnalyzer := analyzer.NewRulesAnalyzer()
 	taskAnalyzer, err := buildAnalyzer(cfg)
-	artifactStorage, err := buildStorage(cfg)
+	resultStorage, err := buildStorage(cfg)
 	if err != nil {
 		log.Fatalf("build storage failed: %v", err)
 	}
@@ -47,10 +49,11 @@ func main() {
 	consumer, err := initTaskConsumerWithRetry(
 		cfg.RabbitMQURL,
 		taskRepo,
+		uploadRepo,
 		processedKeyRepo,
 		//mockAnalyzer,
 		taskAnalyzer,
-		artifactStorage,
+		resultStorage,
 		mq.RetryConfig{
 			MaxRetries: 3,
 		},
@@ -86,6 +89,7 @@ func buildAnalyzer(cfg *config.Config) (analyzer.Analyzer, error) {
 func initTaskConsumerWithRetry(
 	rabbitmqURL string,
 	taskRepo *repository.TaskRepository,
+	uploadRepo *repository.UploadRepository,
 	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
 	artifactStorage storage.Storage,
@@ -95,7 +99,7 @@ func initTaskConsumerWithRetry(
 ) (*mq.TaskConsumer, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		consumer, err := mq.NewTaskConsumer(rabbitmqURL, taskRepo, processedKeyRepo, analyzer, artifactStorage, retryConfig)
+		consumer, err := mq.NewTaskConsumer(rabbitmqURL, taskRepo, uploadRepo, processedKeyRepo, analyzer, artifactStorage, retryConfig)
 		if err == nil {
 			log.Printf("rabbitmq task consumer connected on attempt %d/%d", attempt, maxAttempts)
 			return consumer, nil
@@ -136,8 +140,10 @@ func initMySQLWithRetry(cfg mysqlinfra.Config, maxAttempts int, delay time.Durat
 func buildStorage(cfg *config.Config) (storage.Storage, error) {
 	switch cfg.ArtifactStorageDriver {
 	case "local":
+		log.Printf("storage driver: local, base dir: %s", cfg.ArtifactLocalBaseDir)
 		return localstorage.NewLocalStorage(cfg.ArtifactLocalBaseDir)
 	case "s3":
+		log.Printf("storage driver: s3, bucket: %s, region: %s, endpoint: %s", cfg.S3Bucket, cfg.AWSRegion, cfg.S3Endpoint)
 		return s3storage.New(s3storage.Config{
 			Region: cfg.AWSRegion,
 			Bucket: cfg.S3Bucket,
@@ -147,6 +153,6 @@ func buildStorage(cfg *config.Config) (storage.Storage, error) {
 			ForcePathStyle: cfg.S3ForcePathStyle,
 		})
 	default:
-		return nil, fmt.Errorf("unknown artifact storage driver: %s", cfg.ArtifactStorageDriver)
+		return nil, fmt.Errorf("unsupported artifact storage driver: %s", cfg.ArtifactStorageDriver)
 	}
 }

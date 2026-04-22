@@ -1,16 +1,20 @@
 package model
 
 type ResumeAnalysisInput struct {
-	ResumeText string `json:"resume_text"`
+	ResumeText string `json:"resume_text,omitempty"`
+	ResumeFileKey string `json:"resume_file_key,omitempty"`
 }
 
 type JDAnalysisInput struct {
-	JobDescriptionText string `json:"job_description_text"`
+	JobDescriptionText string `json:"job_description_text,omitempty"`
+	JobDescriptionFileKey string `json:"job_description_file_key,omitempty"`
 }
 
 type ResumeJDMatchInput struct {
-	ResumeText         string `json:"resume_text"`
-	JobDescriptionText string `json:"job_description_text"`
+	ResumeText         string `json:"resume_text,omitempty"`
+	ResumeFileKey      string `json:"resume_file_key,omitempty"`
+	JobDescriptionText string `json:"job_description_text,omitempty"`
+	JobDescriptionFileKey string `json:"job_description_file_key,omitempty"`
 }
 
 type ResumeAnalysisResult struct {

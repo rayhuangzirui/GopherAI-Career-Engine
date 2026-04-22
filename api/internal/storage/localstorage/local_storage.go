@@ -52,4 +52,19 @@ func (s *LocalStorage) Put(ctx context.Context, key string, contentType string, 
 	return nil
 }
 
+func (s *LocalStorage) Get(ctx context.Context, key string) ([]byte, error) {
+	_ = ctx
+	cleanKey := filepath.Clean(strings.TrimPrefix(key, "/"))
+	if cleanKey == "." || cleanKey == "" {
+		return nil, fmt.Errorf("invalid storage key: %q", key)
+	}
+
+	fullPath := filepath.Join(s.baseDir, cleanKey)
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("read local storage file: %w", err)
+	}
+	return data, nil
+}
+
 var _ storage.Storage = (*LocalStorage)(nil)

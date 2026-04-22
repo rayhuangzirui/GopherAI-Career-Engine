@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -47,13 +49,16 @@ func NewTaskHandler(
 
 type CreateResumeAnalysisTaskRequest struct {
 	UserID     int64  `json:"user_id" binding:"required"`
-	ResumeText string `json:"resume_text" binding:"required"`
+	ResumeText string `json:"resume_text"`
+	ResumeFileKey string `json:"resume_file_key"`
 }
 
 type CreateResumeJDMatchTaskRequest struct {
 	UserID             int64  `json:"user_id" binding:"required"`
-	ResumeText         string `json:"resume_text" binding:"required"`
-	JobDescriptionText string `json:"job_description_text" binding:"required"`
+	ResumeText         string `json:"resume_text"`
+	ResumeFileKey       string `json:"resume_file_key"`
+	JobDescriptionText string `json:"job_description_text"`
+	JobDescriptionFileKey string `json:"job_description_file_key"`
 }
 
 type TaskResponse struct {
@@ -106,12 +111,21 @@ func (h *TaskHandler) CreateResumeAnalysisTask(c *gin.Context) {
 		return
 	}
 
+	if err := validateExclusiveInput(req.ResumeText, req.ResumeFileKey, "resume_text", "resume_file_key"); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ok": false,
+			"error": err.Error(),
+		})
+		return
+	}
+
 	if !h.enforceRateLimit(c, req.UserID, model.TaskTypeResumeAnalysis) {
 		return
 	}
 
 	input := model.ResumeAnalysisInput{
 		ResumeText: req.ResumeText,
+		ResumeFileKey: req.ResumeFileKey,
 	}
 
 	h.createTask(c, req.UserID, model.TaskTypeResumeAnalysis, input)
@@ -123,13 +137,31 @@ func (h *TaskHandler) CreateResumeJDMatchTask(c *gin.Context) {
 		return
 	}
 
+	if err := validateExclusiveInput(req.ResumeText, req.ResumeFileKey, "resume_text", "resume_file_key"); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ok": false,
+			"error": err.Error(),
+		})
+		return
+	}
+
+	if err := validateExclusiveInput(req.JobDescriptionText, req.JobDescriptionFileKey, "job_description_text", "job_description_file_key"); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ok": false,
+			"error": err.Error(),
+		})
+		return
+	}
+
 	if !h.enforceRateLimit(c, req.UserID, model.TaskTypeResumeJDMatch) {
 		return
 	}
 
 	input := model.ResumeJDMatchInput{
 		ResumeText:         req.ResumeText,
+		ResumeFileKey:       req.ResumeFileKey,
 		JobDescriptionText: req.JobDescriptionText,
+		JobDescriptionFileKey: req.JobDescriptionFileKey,
 	}
 
 	h.createTask(c, req.UserID, model.TaskTypeResumeJDMatch, input)
@@ -515,4 +547,15 @@ func buildTaskListItemResponse(task model.Task) TaskListItemResponse {
 		CreatedAt:    task.CreatedAt,
 		UpdatedAt:    task.UpdatedAt,
 	}
+}
+
+func validateExclusiveInput(text string, fileKey string, textField string, fileKeyField string) error {
+	hasText := strings.TrimSpace(text) != ""
+	hasFileKey := strings.TrimSpace(fileKey) != ""
+
+	if hasText == hasFileKey {
+		return fmt.Errorf("exactly one of %s or %s must be provided", textField, fileKeyField)
+	}
+
+	return nil
 }

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
+	"strings"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -51,6 +53,7 @@ type TaskConsumer struct {
 	mainQueue        amqp.Queue
 	retryQueue       amqp.Queue
 	taskRepo         *repository.TaskRepository
+	uploadRepo       *repository.UploadRepository
 	processedKeyRepo *repository.ProcessedKeyRepository
 	analyzer         analyzer.Analyzer
 	artifactStorage  storage.Storage
@@ -61,6 +64,7 @@ type TaskConsumer struct {
 func NewTaskConsumer(
 	rabbitMQURL string,
 	taskRepo *repository.TaskRepository,
+	uploadRepo *repository.UploadRepository,
 	processedKeyRepo *repository.ProcessedKeyRepository,
 	analyzer analyzer.Analyzer,
 	artifactStorage storage.Storage,
@@ -79,6 +83,7 @@ func NewTaskConsumer(
 		mainQueue:        mainQ,
 		retryQueue:       retryQ,
 		taskRepo:         taskRepo,
+		uploadRepo:       uploadRepo,
 		processedKeyRepo: processedKeyRepo,
 		analyzer:         analyzer,
 		artifactStorage:  artifactStorage,
@@ -299,7 +304,14 @@ func (c *TaskConsumer) handleResumeAnalysis(ctx context.Context, task *model.Tas
 		}
 	}
 
-	result, err := c.analyzer.AnalyzeResume(input)
+	resumeText, taskErr := c.resolveInputText(ctx, task.UserID, model.UploadKindResume, input.ResumeText, input.ResumeFileKey)
+	if taskErr != nil {
+		return nil, taskErr
+	}
+
+	result, err := c.analyzer.AnalyzeResume(model.ResumeAnalysisInput{
+		ResumeText: resumeText,
+	})
 	if err != nil {
 		return nil, &TaskExecError{
 			Message:   "resume analysis failed",
@@ -330,7 +342,20 @@ func (c *TaskConsumer) handleResumeJDMatch(ctx context.Context, task *model.Task
 		}
 	}
 
-	result, err := c.analyzer.MatchResumeJD(input)
+	resumeText, taskErr := c.resolveInputText(ctx, task.UserID, model.UploadKindResume, input.ResumeText, input.ResumeFileKey)
+	if taskErr != nil {
+		return nil, taskErr
+	}
+
+	jdText, taskErr := c.resolveInputText(ctx, task.UserID, model.UploadKindJD, input.JobDescriptionText, input.JobDescriptionFileKey)
+	if taskErr != nil {
+		return nil, taskErr
+	}
+
+	result, err := c.analyzer.MatchResumeJD(model.ResumeJDMatchInput{
+		ResumeText:         resumeText,
+		JobDescriptionText: 	jdText,
+	})
 	if err != nil {
 		return nil, &TaskExecError{
 			Message:   "resume JD match analysis failed",
@@ -351,17 +376,88 @@ func (c *TaskConsumer) handleResumeJDMatch(ctx context.Context, task *model.Task
 	return resultBytes, nil
 }
 
-func isRetryableError(err error) bool {
-	// Unretryable errors:
-	// failed to parse input payload
-	// failed to marshal result payload
-	// unsupported task type
+func (c *TaskConsumer) resolveInputText(
+	ctx context.Context,
+	userID int64,
+	expectedKind string,
+	text string,
+	fileKey string,
+) (string, *TaskExecError) {
+	if strings.TrimSpace(text) != "" {
+		return text, nil
+	}
 
-	// Retryable errors:
-	// analyzer returns runtime error
-	// analyzer returns analysis error
-	// LLM/external API call fails
-	return true
+	if strings.TrimSpace(fileKey) == "" {
+		return "", &TaskExecError{
+			Message:   "input text or file key is required",
+			Cause:     nil,
+			Retryable: false,
+		}
+	}
+
+	upload, err := c.uploadRepo.GetUploadByStorageKey(ctx, fileKey)
+	if err != nil {
+		return "", &TaskExecError{
+			Message:   "failed to load upload metadata",
+			Cause:     err,
+			Retryable: false,
+		}
+	}
+
+	if upload.UserID != userID {
+		return "", &TaskExecError{
+			Message:   "upload does not belong to task user",
+			Cause:     nil,
+			Retryable: false,
+		}
+	}
+
+	if upload.FileKind != expectedKind {
+		return "", &TaskExecError{
+			Message:   "upload kind does not match task input",
+			Cause:     nil,
+			Retryable: false,
+		}
+	}
+
+	data, err := c.artifactStorage.Get(ctx, upload.StorageKey)
+	if err != nil {
+		return "", &TaskExecError{
+			Message:   "failed to read uploaded file from storage",
+			Cause:     err,
+			Retryable: true,
+		}
+	}
+
+	textContent, err := extractPlainText(upload.OriginalFilename, upload.ContentType, data)
+	if err != nil {
+		return "", &TaskExecError{
+			Message:   "failed to extract text from uploaded file",
+			Cause:     err,
+			Retryable: false,
+		}
+	}
+
+	return textContent, nil
+}
+
+func extractPlainText(filename string, contentType string, data []byte) (string, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
+
+	if ext != ".txt" {
+		return "", fmt.Errorf("unsupported file extension %q; only .txt files are supported in this version", ext)
+	}
+
+	if contentType != "" && !strings.HasPrefix(strings.ToLower(contentType), "text/plain") && contentType != "application/octet-stream" {
+		return "", fmt.Errorf("unsupported content type %q; only text/plain and application/octet-stream are supported in this version", contentType)
+	}
+
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return "", fmt.Errorf("empty file content")
+	}
+
+	return text, nil
 }
 
 func (c *TaskConsumer) Close() error {
