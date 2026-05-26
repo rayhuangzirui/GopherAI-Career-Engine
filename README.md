@@ -28,15 +28,22 @@ I also wanted to put the LLM part inside a more controlled backend pipeline.
 - cache task reads and rate-limit task creation with Redis
 - show results and task history in a simple frontend demo
 
-## High-level flow
+## Core Task Flow
 
-1. The user submits text or uploads files
-2. The API creates a task in MySQL
-3. The task is published to RabbitMQ
-4. A worker picks up the task
-5. The worker reads the input, runs analysis, and writes the result
-6. The result can be queried later by task ID
-   
+1. A user submits a resume-analysis or resume/JD matching request
+2. The API creates a task record in MySQL
+3. The API publishes a message to RabbitMQ
+4. A worker consumes the message and moves the task into `processing`
+5. The worker resolves input from either:
+    - raw text in the task payload, or
+    - uploaded file(s) referenced by `file_key`
+6. The worker runs the analyzer
+7. On temporary failure, the task is retried with delayed backoff
+8. On success:
+    - the result is stored in MySQL as `result_payload`
+    - the result artifact is also persisted to external storage
+9. On repeated or non-retryable failure, the task becomes `permanently_failed`
+
 ## RabbitMQ usage
 
 RabbitMQ is used to decouple task creation from task execution.
@@ -180,11 +187,16 @@ curl -s -X POST "http://localhost:8080/tasks/resume-jd-match" \
 
 In local rules mode with 2 workers:
 
-- 100 tasks submitted
-- 80 completed
-- 20 permanently failed (expected injected failures)
-- 0 unfinished
-- no duplicate finalization observed
+- **100 tasks submitted**
+- **80 completed**
+- **20 permanently_failed** (expected injected failures)
+- **0 unfinished**
+- **Task creation latency:** 60.9 ms avg, 60.4 ms p50, 81.9 ms p95
+- **Successful completion latency:** 3553.9 ms avg, 3578.8 ms p50, 5808.1 ms p95
+- **Failure-path latency:** 48.2 s avg due to delayed retries
+- **Task behavior validation passed**
+- **`processed_keys` / idempotency validation passed**
+- **No duplicate finalization observed**
 
 ## Current limitations
 
